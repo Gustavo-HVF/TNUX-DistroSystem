@@ -1,0 +1,8 @@
+js_write
+js_agora
+js_http
+js_gui
+js_aleatorio
+js_dormir
+js_wasm
+js_interrompido

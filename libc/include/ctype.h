@@ -1,0 +1,7 @@
+/* TNUX libc: ctype.h (só para o alvo WebAssembly) */
+#ifndef TNUX_CTYPE_H
+#define TNUX_CTYPE_H
+int isdigit(int c); int isalpha(int c); int isalnum(int c); int isspace(int c);
+int isupper(int c); int islower(int c); int isxdigit(int c); int isprint(int c); int ispunct(int c);
+int toupper(int c); int tolower(int c);
+#endif
