@@ -8,6 +8,7 @@
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include "../nucleo/tnux.h"
+#include "../ponte/comum.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,28 +133,6 @@ int host_http(const char *metodo, const char *url, const char *cab, const char *
     return status;
 }
 
-/* ------------------------------------------------------------------ onde está a pasta do TNUX */
-
-char *nativo_raiz(void) {
-    const char *e = getenv("TNUX_RAIZ");
-    if (e && *e) return xstrdup(e);
-    char exe[4096];
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-    if (n > 0) {
-        exe[n] = 0;
-        char *b = strrchr(exe, '/');
-        if (b) {
-            *b = 0;
-            char teste[4200];
-            snprintf(teste, sizeof teste, "%s/../web/index.html", exe);
-            if (access(teste, R_OK) == 0) { b = strrchr(exe, '/'); if (b) *b = 0; return xstrdup(exe); }
-            snprintf(teste, sizeof teste, "%s/web/index.html", exe);
-            if (access(teste, R_OK) == 0) return xstrdup(exe);
-        }
-    }
-    return xstrdup(".");
-}
-
 /* ------------------------------------------------------------------ terminal */
 
 static struct termios termios_salvo;
@@ -184,7 +163,7 @@ int sandbox_main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--imagem") && i + 1 < argc) imagem = argv[++i];
         else if (!strcmp(argv[i], "--sem-disco")) sem_disco = 1;
     }
-    char *raiz = nativo_raiz();
+    char *raiz = raiz_tnux();
     raiz_web = xasprintf("%s/web", raiz);
     char *img_padrao = NULL;
     if (!imagem && !sem_disco) {
