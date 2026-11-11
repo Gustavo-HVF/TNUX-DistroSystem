@@ -16,7 +16,7 @@ struct Editor {
     char *prompt; int plarg;          /* largura visível do prompt */
     char *buf; size_t len, cap, pos;  /* em bytes; pos sempre no começo de um caractere */
     int cols;
-    int maxlin, poslarg_ant;          /* estado do último desenho */
+    int maxlin, poslarg_ant, ltxt;    /* estado do último desenho (linhas usadas, coluna do cursor, largura do texto) */
     char **hist; int nhist, caphist, ihist;
     char *rascunho;                   /* linha em edição enquanto se anda no histórico */
     int est; char seq[24]; int nseq;  /* leitor de sequências de escape */
@@ -84,7 +84,9 @@ static void desenhar(Editor *e) {
     if (col) { snprintf(t, sizeof t, "\r\x1b[%dC", col); buf_puts(&b, t); }
     else buf_puts(&b, "\r");
     if (linhas > e->maxlin) e->maxlin = linhas;
+    if (e->maxlin < 1) e->maxlin = 1;
     e->poslarg_ant = lpos;
+    e->ltxt = ltxt;
     wn(e, b.d, b.n);
     buf_free(&b);
 }
@@ -329,24 +331,25 @@ int ed_byte(Editor *e, unsigned char ch) {
         {
             char s = (char)ch;
             inserir(e, &s, 1);
-            /* caminho rápido: digitando no fim de uma linha que cabe na tela */
-            if ((ch & 0xC0) == 0x80 || ch < 0x80) {
-                int tot = e->plarg + largura(e->buf, e->len);
-                if (e->pos == e->len && tot < e->cols && e->maxlin <= 1) {
-                    /* bytes de continuação UTF-8 saem junto com o primeiro: redesenhar é mais seguro */
-                    if (ch < 0x80) { wn(e, &s, 1); e->poslarg_ant = largura(e->buf, e->pos); if (e->maxlin < 1) e->maxlin = 1; return ED_NADA; }
-                }
-            } else return ED_NADA;            /* primeiro byte de um caractere UTF-8: espera o resto */
-            /* só redesenha quando o caractere UTF-8 está completo */
-            {
-                size_t i = e->pos;
+            /* acha o começo do caractere UTF-8 que este byte completa (ou ainda não completa) */
+            size_t ini = e->pos - 1;
+            if (ch >= 0x80) {
+                if ((ch & 0xC0) == 0xC0) return ED_NADA;        /* primeiro byte: espera o resto */
                 int cont = 0;
-                while (i > 0 && ((unsigned char)e->buf[i - 1] & 0xC0) == 0x80) { i--; cont++; }
-                if (i > 0) {
-                    unsigned char l = (unsigned char)e->buf[i - 1];
-                    int precisa = l >= 0xF0 ? 3 : l >= 0xE0 ? 2 : l >= 0xC0 ? 1 : 0;
-                    if (cont < precisa) return ED_NADA;
-                }
+                while (ini > 0 && ((unsigned char)e->buf[ini] & 0xC0) == 0x80) { ini--; cont++; }
+                unsigned char l = (unsigned char)e->buf[ini];
+                int precisa = l >= 0xF0 ? 3 : l >= 0xE0 ? 2 : l >= 0xC0 ? 1 : 0;
+                if (cont < precisa) return ED_NADA;
+            }
+            /* caminho rápido: digitando (ou colando) no fim da linha, basta escrever o caractere */
+            if (e->pos == e->len && e->maxlin >= 1) {
+                wn(e, e->buf + ini, e->pos - ini);
+                e->ltxt++;
+                int linhas = (e->plarg + e->ltxt + e->cols - 1) / e->cols;
+                if ((e->plarg + e->ltxt) % e->cols == 0) { w(e, "\n\r"); linhas++; }
+                if (linhas > e->maxlin) e->maxlin = linhas;
+                e->poslarg_ant = e->ltxt;
+                return ED_NADA;
             }
         }
         break;

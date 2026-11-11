@@ -10,7 +10,7 @@
 
 CC      ?= cc
 CFLAGS  ?= -O2
-AVISOS   = -Wall -Wextra -Wno-unused-parameter
+AVISOS   = -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation
 NUCLEO   = $(wildcard nucleo/*.c)
 CAB      = $(wildcard nucleo/*.h)
 
@@ -28,7 +28,7 @@ build/tnux: ponte/tnux.c ponte/comum.h plataforma/nativo.c $(NUCLEO) $(CAB)
 
 build/tnuxd: ponte/tnuxd.c ponte/comum.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(AVISOS) -o $@ ponte/tnuxd.c -lutil
+	$(CC) $(CFLAGS) $(AVISOS) -o $@ ponte/tnuxd.c
 
 wasm: web/tnux.wasm
 web/tnux.wasm: $(NUCLEO) $(CAB) plataforma/wasm.c libc/libc.c plataforma/importadas.txt
