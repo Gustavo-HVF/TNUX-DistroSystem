@@ -200,7 +200,13 @@ async function modoPonte(navegador) {
   fs.writeFileSync(path.join(casa, 'Documentos', 'do-aparelho.txt'), 'arquivo de verdade\n');
   const livre = await new Promise((ok) => { const s = http.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
   const token = 'chave-do-teste-de-navegador-0123456789';
-  const amb = { ...process.env, HOME: casa, TNUX_RAIZ: RAIZ };
+  /* um cloudflared e um LNUX de mentira: imitam a saída dos de verdade */
+  fs.mkdirSync(path.join(casa, 'bin'));
+  const cfTeste = fs.readFileSync(path.join(__dirname, 'testar_ponte.py'), 'utf8').match(/CLOUDFLARED_FALSO = "{3}([\s\S]*?)"{3}/)[1];
+  fs.writeFileSync(path.join(casa, 'bin', 'cloudflared'), cfTeste, { mode: 0o755 });
+  fs.mkdirSync(path.join(casa, 'LNUX'));
+  fs.writeFileSync(path.join(casa, 'LNUX', 'lnux.py'), 'import sys\nprint("LNUX recebeu: " + " ".join(sys.argv[1:]))\n');
+  const amb = { ...process.env, HOME: casa, TNUX_RAIZ: RAIZ, PATH: path.join(casa, 'bin') + ':' + process.env.PATH };
   delete amb.DISPLAY; delete amb.WAYLAND_DISPLAY;
   const ponte = spawn(path.join(RAIZ, 'build', 'tnuxd'), ['--porta', String(livre), '--token', token], { env: amb, stdio: 'ignore' });
   await new Promise((ok) => setTimeout(ok, 500));
@@ -300,6 +306,50 @@ async function modoPonte(navegador) {
       await pagina.click('.jan:not(.inativa) .fechar');
     }
 
+    /* o LNUX pela área de trabalho */
+    await abrirPeloMenu(pagina, 'LNUX');
+    await pagina.waitForSelector('.bv-cartoes button:has-text("Ficha do sistema")');
+    confere('LNUX: a janela acha o LNUX instalado', (await pagina.textContent('.pag')).includes(path.join(casa, 'LNUX', 'lnux.py')));
+    await pagina.click('.bv-cartoes button:has-text("Ficha do sistema")');
+    let tl = await esperaTerminal(pagina, 'Pressione Enter');
+    confere('LNUX: a opção roda o lnux no terminal', tl.includes('LNUX recebeu: ficha') && tl.includes('Pressione Enter'), tl);
+    await pagina.keyboard.press('Enter');
+    await pagina.waitForTimeout(500);
+    await pagina.click('.bv-cartoes button:has-text("Baixar música")');
+    await pagina.fill('.dlg .campo', 'Garota de Ipanema (ao vivo)');
+    await pagina.keyboard.press('Enter');
+    tl = await esperaTerminal(pagina, 'LNUX recebeu: baixar');
+    confere('LNUX: opção que pergunta antes, com espaços e parênteses', tl.includes('LNUX recebeu: baixar Garota de Ipanema (ao vivo)'), tl);
+    await foto(pagina, '11-lnux');
+    await pagina.keyboard.press('Enter');
+    await pagina.waitForTimeout(500);
+    await pagina.click('.jan:not(.inativa) .fechar');
+
+    /* compartilhar pela internet (túnel da Cloudflare) */
+    await abrirPeloMenu(pagina, 'Compartilhar');
+    await pagina.click('.pag button:has-text("Criar o link")');
+    await pagina.waitForSelector('.pag input.campo', { timeout: 15000 });
+    const link = await pagina.inputValue('.pag input.campo');
+    confere('compartilhar: aparece o link do túnel', /^https:\/\/palavras-de-teste-aqui\.trycloudflare\.com\/#token=[0-9a-f]{48}$/.test(link), link);
+    await pagina.waitForFunction(() => { const i = document.querySelector('.pag img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 8000 });
+    confere('compartilhar: o QR code aparece', true);
+    await foto(pagina, '12-compartilhar');
+    /* outro aparelho abre o link (aqui direto na porta, sem o https que a Cloudflare põe na frente) */
+    const fora = await navegador.newContext({ viewport: { width: 1100, height: 760 } });
+    const p3 = await fora.newPage();
+    await p3.goto(link.replace('https://palavras-de-teste-aqui.trycloudflare.com/', `http://palavras-de-teste-aqui.trycloudflare.com:${livre}/`));
+    await p3.waitForSelector('#boot', { state: 'detached', timeout: 30000 });
+    confere('pelo link do túnel, a área de trabalho abre no modo ponte', await p3.evaluate(() => Sistema.modo) === 'ponte');
+    const ls = await p3.evaluate(async () => (await Sistema.fs.listar(Sistema.fs.casa)).map((e) => e.nome));
+    confere('pelo link do túnel, os arquivos do aparelho aparecem', ls.includes('Documentos') && ls.includes('LNUX'), ls);
+    await pagina.bringToFront();
+    await pagina.click('.pag button:has-text("Desligar o link")');
+    await pagina.waitForSelector('.pag button:has-text("Criar o link")', { timeout: 8000 });
+    const negado = await p3.evaluate(async () => { try { await Sistema.fs.listar('/'); return false; } catch (e) { return true; } });
+    confere('desligado o túnel, quem tinha o link perde o acesso', negado);
+    await fora.close();
+    await pagina.click('.jan:not(.inativa) .fechar');
+
     if (spawnSync('sh', ['-c', 'command -v Xvnc || command -v Xtigervnc']).status === 0 && spawnSync('sh', ['-c', 'command -v xterm']).status === 0) {
       await abrirPeloMenu(pagina, 'Tela do aparelho');
       await pagina.click('.tela-palco button:has-text("Ligar a tela")');
@@ -337,7 +387,7 @@ async function modoPonte(navegador) {
 }
 
 (async () => {
-  const navegador = await chromium.launch();
+  const navegador = await chromium.launch({ args: ['--host-resolver-rules=MAP palavras-de-teste-aqui.trycloudflare.com 127.0.0.1'] });
   try {
     await modoNavegador(navegador);
     if (fs.existsSync(path.join(RAIZ, 'build', 'tnuxd'))) await modoPonte(navegador);

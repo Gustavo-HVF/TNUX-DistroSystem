@@ -31,6 +31,8 @@ const Sistema = (() => {
     { id: 'calculadora', nome: 'Calculadora', resumo: 'Faça contas', icone: 'calculadora', categoria: 'Acessórios' },
     { id: 'sobre', nome: 'Informações do Sistema', resumo: 'Versão do TNUX e dados do aparelho', icone: 'info', categoria: 'Preferências' },
     { id: 'processamento', nome: 'Processamento no computador', resumo: 'O computador faz o serviço pesado para o aparelho', icone: 'monitor', categoria: 'Sistema' },
+    { id: 'lnux', nome: 'LNUX', resumo: 'O canivete suíço do terminal: músicas, vídeos, servidores, rede e mais', icone: 'lnux', categoria: 'Acessórios' },
+    { id: 'compartilhar', nome: 'Compartilhar pela internet', resumo: 'Um link https (Cloudflare) para abrir esta área de trabalho de qualquer lugar', icone: 'compartilhar', categoria: 'Internet' },
     { id: 'boasvindas', nome: 'Bem-vindo', resumo: 'Primeiros passos no TNUX', icone: 'tnux', categoria: 'Sistema' },
   ];
 

@@ -92,4 +92,41 @@ static inline void nome_sistema(char *dst, size_t n) {
     }
     fclose(f);
 }
+
+/* acha o lnux.py (o LNUX, do mesmo autor). Ordem: $LNUX_PY, as pastas de sempre, e o apelido
+ * "lnux" que o instalador do LNUX grava no ~/.bashrc. Devolve 1 e o caminho em dst se achou. */
+static inline int achar_lnux(char *dst, size_t n) {
+    const char *e = getenv("LNUX_PY");
+    if (e && *e && access(e, R_OK) == 0) { snprintf(dst, n, "%s", e); return 1; }
+    const char *casa = getenv("HOME");
+    if (!casa) casa = "";
+    static const char *const pastas[] = { "LNUX", "Termux-Toons", "lnux", "termux-toons", ".lnux/app", NULL };
+    for (int i = 0; pastas[i]; i++) {
+        snprintf(dst, n, "%s/%s/lnux.py", casa, pastas[i]);
+        if (access(dst, R_OK) == 0) return 1;
+    }
+    char rc[4200];
+    snprintf(rc, sizeof rc, "%s/.bashrc", casa);
+    FILE *f = fopen(rc, "r");
+    if (f) {
+        char l[4200];
+        int achou = 0;
+        while (!achou && fgets(l, sizeof l, f)) {
+            char *p = strstr(l, "alias lnux=");
+            if (!p) continue;
+            p += 11;
+            if (*p == '\'' || *p == '"') p++;
+            char *py = strstr(p, "lnux.py");
+            if (!py) continue;
+            py[7] = 0;
+            char *ini = strrchr(p, ' ');
+            ini = ini ? ini + 1 : p;
+            if (access(ini, R_OK) == 0) { snprintf(dst, n, "%s", ini); achou = 1; }
+        }
+        fclose(f);
+        if (achou) return 1;
+    }
+    dst[0] = 0;
+    return 0;
+}
 #endif
