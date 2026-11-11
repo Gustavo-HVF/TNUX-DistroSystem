@@ -65,22 +65,22 @@ svg { display: block; }
 /* ------------------------------------------------------------------ área de trabalho */
 #area { position: fixed; left: 0; right: 0; top: 0; bottom: var(--painel-alt); overflow: hidden; }
 #fundo { position: absolute; inset: 0; background-size: cover; background-position: center; }
-#fundo[data-fundo="aurora"] {
+[data-fundo="aurora"] {
   background:
     radial-gradient(120% 90% at 85% 110%, rgba(95, 211, 138, .55) 0%, transparent 55%),
     radial-gradient(90% 80% at 0% 0%, rgba(31, 138, 120, .65) 0%, transparent 60%),
     radial-gradient(70% 60% at 60% 20%, rgba(53, 168, 84, .35) 0%, transparent 60%),
     linear-gradient(160deg, #10241c 0%, #1d4a3a 55%, #17382c 100%);
 }
-#fundo[data-fundo="menta"] { background: linear-gradient(150deg, #dff3e3 0%, #a8dcb5 45%, #6fc08a 100%); }
-#fundo[data-fundo="noite"] {
+[data-fundo="menta"] { background: linear-gradient(150deg, #dff3e3 0%, #a8dcb5 45%, #6fc08a 100%); }
+[data-fundo="noite"] {
   background:
     radial-gradient(80% 70% at 80% 10%, rgba(80, 110, 220, .45) 0%, transparent 60%),
     radial-gradient(90% 80% at 10% 100%, rgba(120, 60, 170, .4) 0%, transparent 60%),
     linear-gradient(170deg, #0c1022 0%, #171d3d 100%);
 }
-#fundo[data-fundo="grafite"] { background: linear-gradient(160deg, #3b4246 0%, #23282b 100%); }
-#fundo[data-fundo="por-do-sol"] { background: linear-gradient(170deg, #2b1b4a 0%, #8a3a6b 45%, #f08a4b 85%, #ffd27a 100%); }
+[data-fundo="grafite"] { background: linear-gradient(160deg, #3b4246 0%, #23282b 100%); }
+[data-fundo="por-do-sol"] { background: linear-gradient(170deg, #2b1b4a 0%, #8a3a6b 45%, #f08a4b 85%, #ffd27a 100%); }
 #fundo::after {
   content: ""; position: absolute; right: 4%; bottom: 6%; width: min(22vw, 190px); aspect-ratio: 1; opacity: .13; pointer-events: none;
   background: url("../img/tnux.svg") center / contain no-repeat; filter: grayscale(1) brightness(3);

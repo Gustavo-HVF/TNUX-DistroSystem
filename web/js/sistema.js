@@ -239,6 +239,7 @@ const Sistema = (() => {
     async listar() {
       if (modo === 'navegador') return chamar('apps');
       const lista = INTERNOS.map((a) => ({ ...a, tipo: 'interno', alvo: a.id }));
+      lista.push({ id: 'tela', nome: 'Tela do aparelho', resumo: 'Veja e use os programas gráficos do aparelho (Chromium, Firefox, GIMP...)', icone: 'tela', categoria: 'Sistema', tipo: 'interno', alvo: 'tela' });
       try {
         const j = await apiJson('GET', 'api/apps');
         for (const w of j.web) {
