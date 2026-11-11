@@ -45,8 +45,10 @@ web/programas/%.wasm: programas/%.c programas/tnuxsdk.h
 
 teste: build/tnux build/tnuxd
 	bash tests/testar_nucleo.sh
-	python3 tests/testar_ponte.py
 	node tests/testar_wasm.js
+	python3 tests/testar_ponte.py
+	@if node -e "require('playwright')" 2>/dev/null; then node tests/testar_navegador.js; \
+	else echo "(Playwright não instalado: pulei o teste da área de trabalho no navegador)"; fi
 
 limpar:
 	rm -rf build

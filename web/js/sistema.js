@@ -30,6 +30,7 @@ const Sistema = (() => {
     { id: 'imagem', nome: 'Visualizador de Imagens', resumo: 'Veja suas imagens', icone: 'imagem', categoria: 'Gráficos' },
     { id: 'calculadora', nome: 'Calculadora', resumo: 'Faça contas', icone: 'calculadora', categoria: 'Acessórios' },
     { id: 'sobre', nome: 'Informações do Sistema', resumo: 'Versão do TNUX e dados do aparelho', icone: 'info', categoria: 'Preferências' },
+    { id: 'processamento', nome: 'Processamento no computador', resumo: 'O computador faz o serviço pesado para o aparelho', icone: 'monitor', categoria: 'Sistema' },
     { id: 'boasvindas', nome: 'Bem-vindo', resumo: 'Primeiros passos no TNUX', icone: 'tnux', categoria: 'Sistema' },
   ];
 
@@ -382,6 +383,9 @@ const Sistema = (() => {
     get primeiroBoot() { return primeiroBoot; },
     get vfs() { return vfsPronto; },
     fs, terminal, apps, pacotes, tela, disco, rodar, rodarOk, reiniciarNucleo, ocupadoHa,
+    /* acesso direto à API da ponte (só no modo ponte) */
+    ponte: { json: apiJson, pedir: api },
+    descricao: () => cfgBoot().plataforma,
     versao: '1.0', codinome: 'Aurora',
   };
 })();

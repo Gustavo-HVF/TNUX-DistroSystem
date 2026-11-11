@@ -36,6 +36,7 @@ static const Interno INTERNOS[] = {
     { "imagem", "Visualizador de Imagens", "Veja suas imagens", "imagem", "Gráficos", 0 },
     { "calculadora", "Calculadora", "Faça contas", "calculadora", "Acessórios", 0 },
     { "sobre", "Informações do Sistema", "Versão do TNUX e dados do aparelho", "info", "Preferências", 0 },
+    { "processamento", "Processamento no computador", "O computador faz o serviço pesado para o aparelho", "monitor", "Sistema", 0 },
     { "boasvindas", "Bem-vindo", "Primeiros passos no TNUX", "tnux", "Sistema", 0 },
     { NULL, NULL, NULL, NULL, NULL, 0 }
 };

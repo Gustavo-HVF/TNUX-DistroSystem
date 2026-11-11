@@ -208,6 +208,7 @@ async function modoPonte(navegador) {
   const pagina = await ctx.newPage();
   const erros = [];
   pagina.on('pageerror', (e) => erros.push('erro na página: ' + e.message));
+  pagina.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) erros.push('console: ' + m.text()); });
   try {
     await pagina.goto(`http://127.0.0.1:${livre}/#token=${token}`);
     await pagina.waitForSelector('#boot', { state: 'detached', timeout: 30000 });
@@ -232,6 +233,72 @@ async function modoPonte(navegador) {
     confere('ponte: editor grava no aparelho', fs.readFileSync(path.join(casa, 'criado.txt'), 'utf8') === 'editado pela area de trabalho\n');
     await pagina.click('.jan:not(.inativa) .fechar');
     await pagina.click('.jan:not(.inativa) .fechar');
+
+    /* o computador processa para o aparelho: o "tnux pc" (no aparelho) manda, esta aba (o computador) faz */
+    {
+      const zlib = require('zlib'), crypto = require('crypto');
+      /* (sem bloquear o Node: o navegador do teste precisa continuar sendo atendido enquanto o comando espera) */
+      const tnux = (args) => new Promise((ok) => {
+        const p = spawn(path.join(RAIZ, 'build', 'tnux'), ['pc', ...args], { env: amb, cwd: path.join(casa, 'Fotos') });
+        let stdout = '', stderr = '';
+        p.stdout.on('data', (d) => { stdout += d; });
+        p.stderr.on('data', (d) => { stderr += d; });
+        const t = setTimeout(() => p.kill('SIGINT'), 45000);
+        p.on('close', (status) => { clearTimeout(t); ok({ status, stdout, stderr }); });
+      });
+      fs.mkdirSync(path.join(casa, 'Fotos', 'sub'), { recursive: true });
+      /* um PNG de verdade (640x480, degradê), montado à mão */
+      const L = 640, A = 480, bruto = Buffer.alloc((L * 3 + 1) * A);
+      for (let y = 0; y < A; y++) for (let x = 0; x < L; x++) { const o = y * (L * 3 + 1) + 1 + x * 3; bruto[o] = x * 255 / L; bruto[o + 1] = y * 255 / A; bruto[o + 2] = (x ^ y) & 255; }
+      const crc = (b) => { let c = 0xffffffff; for (const x of b) { c ^= x; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; } return (c ^ 0xffffffff) >>> 0; };
+      const pedaco = (tipo, dados) => { const b = Buffer.concat([Buffer.from(tipo), dados]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(b)); const n = Buffer.alloc(4); n.writeUInt32BE(dados.length); return Buffer.concat([n, b, c]); };
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(L, 0); ihdr.writeUInt32BE(A, 4); ihdr[8] = 8; ihdr[9] = 2;
+      const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pedaco('IHDR', ihdr), pedaco('IDAT', zlib.deflateSync(bruto)), pedaco('IEND', Buffer.alloc(0))]);
+      fs.writeFileSync(path.join(casa, 'Fotos', 'foto1.png'), png);
+      fs.writeFileSync(path.join(casa, 'Fotos', 'sub', 'foto2.png'), png);
+      const numeros = Array.from({ length: 20000 }, (_, i) => (i * 7919) % 97).join('\n') + '\n';
+      fs.writeFileSync(path.join(casa, 'Fotos', 'numeros.txt'), numeros);
+
+      let r = await tnux([]);
+      confere('tnux pc: vê o computador conectado', r.status === 0 && /Computadores prontos/.test(r.stdout) && /núcleos/.test(r.stdout), r.stdout + r.stderr);
+      r = await tnux(['imagem', '--para', 'webp', '--largura', '320', 'foto1.png', 'sub/foto2.png']);
+      const webp = fs.existsSync(path.join(casa, 'Fotos', 'foto1.webp')) ? fs.readFileSync(path.join(casa, 'Fotos', 'foto1.webp')) : Buffer.alloc(0);
+      confere('tnux pc imagem: o computador converte e devolve ao aparelho', r.status === 0 && webp.subarray(0, 4).toString() === 'RIFF' && webp.subarray(8, 12).toString() === 'WEBP' &&
+        fs.existsSync(path.join(casa, 'Fotos', 'sub', 'foto2.webp')) && /2 imagens convertidas para webp/.test(r.stdout) && /320×240/.test(r.stdout) && webp.length < png.length, r.stdout + r.stderr);
+      r = await tnux(['zip', 'tudo.zip', 'foto1.png', 'sub', 'numeros.txt']);
+      confere('tnux pc zip', r.status === 0 && fs.existsSync(path.join(casa, 'Fotos', 'tudo.zip')) && /tudo\.zip: 4 arquivos/.test(r.stdout), r.stdout + r.stderr);
+      const lista = spawnSync('python3', ['-c', 'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);print(sorted(z.namelist()));print(z.testzip())', path.join(casa, 'Fotos', 'tudo.zip')], { encoding: 'utf8' });
+      confere('o zip feito pelo computador é válido', lista.stdout.trim() === "['foto1.png', 'numeros.txt', 'sub/foto2.png', 'sub/foto2.webp']\nNone", lista.stdout + lista.stderr);
+      r = await tnux(['unzip', 'tudo.zip', 'extraido']);
+      confere('tnux pc unzip', r.status === 0 && fs.readFileSync(path.join(casa, 'Fotos', 'extraido', 'numeros.txt'), 'utf8') === numeros &&
+        fs.readFileSync(path.join(casa, 'Fotos', 'extraido', 'sub', 'foto2.png')).equals(png), r.stdout + r.stderr);
+      r = await tnux(['hash', 'foto1.png']);
+      confere('tnux pc hash', r.status === 0 && r.stdout.trim() === crypto.createHash('sha256').update(png).digest('hex') + '  foto1.png', r.stdout + r.stderr);
+      r = await tnux(['rodar', 'sort -n numeros.txt | uniq -c | sort -rn | head -n 3 > mais.txt; wc -l < numeros.txt; echo fim', 'numeros.txt']);
+      const mais = fs.existsSync(path.join(casa, 'Fotos', 'mais.txt')) ? fs.readFileSync(path.join(casa, 'Fotos', 'mais.txt'), 'utf8') : '';
+      confere('tnux pc rodar: comandos do TNUX rodam no computador e o resultado volta', r.status === 0 && /^20000\nfim\n/.test(r.stdout) && /arquivo devolvido ao aparelho: mais\.txt/.test(r.stdout) && mais.split('\n').length === 4 && /^\s+207 /.test(mais), r.stdout + r.stderr + '\n' + mais);
+      r = await tnux(['rodar', 'cat nao-existe.txt']);
+      confere('tnux pc rodar: erro do comando volta como erro', r.status === 1 && /inexistente/.test(r.stderr), r.stdout + r.stderr);
+      r = await tnux(['imagem', 'nao-tem.png']);
+      confere('tnux pc: arquivo que não existe é avisado na hora', r.status !== 0 && /nao-tem\.png/.test(r.stderr), r.stdout + r.stderr);
+
+      /* as mesmas operações pelo menu do Gerenciador de Arquivos */
+      await abrirPeloMenu(pagina, 'Arquivos');
+      await pagina.waitForSelector('.arq-item[data-nome="Fotos"]');
+      await pagina.dblclick('.arq-item[data-nome="Fotos"]');
+      await pagina.waitForSelector('.arq-item[data-nome="foto1.png"]');
+      await pagina.click('.arq-item[data-nome="foto1.png"]', { button: 'right' });
+      await pagina.click('.ctx button:has-text("Calcular SHA-256")');
+      await pagina.waitForSelector('.dlg .txt');
+      confere('arquivos: SHA-256 pelo menu', (await pagina.textContent('.dlg .txt')).startsWith(crypto.createHash('sha256').update(png).digest('hex')), await pagina.textContent('.dlg .txt'));
+      await pagina.keyboard.press('Enter');
+      await pagina.click('.jan:not(.inativa) .fechar');
+      await abrirPeloMenu(pagina, 'Processamento');
+      await pagina.waitForSelector('.pag .grupo');
+      confere('janela de processamento lista os trabalhos', /Trabalhos feitos nesta aba/.test(await pagina.textContent('.pag')) && await pagina.locator('.pag .etq.ok').count() >= 5, (await pagina.textContent('.pag')).slice(0, 300));
+      await foto(pagina, '10-ponte-processamento');
+      await pagina.click('.jan:not(.inativa) .fechar');
+    }
 
     if (spawnSync('sh', ['-c', 'command -v Xvnc || command -v Xtigervnc']).status === 0 && spawnSync('sh', ['-c', 'command -v xterm']).status === 0) {
       await abrirPeloMenu(pagina, 'Tela do aparelho');

@@ -17,6 +17,7 @@ window.tnuxInicio = performance.now();
     $('#painel').hidden = false;
     Cfg.aplicar();
     await Desktop.iniciar();
+    Processador.ligar();        /* no modo ponte, este computador passa a atender os pedidos de processamento do aparelho */
 
     /* pedidos que vêm do terminal: xdg-open, nano, nemo, firefox, reboot... */
     Sistema.ouvir('gui', (m) => {

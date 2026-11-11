@@ -327,6 +327,7 @@ Apps.arquivos = async (inicio) => {
       { rotulo: 'Copiar', icone: 'copiar', acao: () => guardar('copiar') },
       um && { rotulo: 'Renomear', icone: 'renomear', acao: () => renomear(it) },
       um && it.tipo === 'f' && { rotulo: 'Salvar no meu aparelho', icone: 'baixar', acao: () => Apps.baixar(c).catch((er) => Avisos.erro('Não foi possível salvar', er)) },
+      ...Processador.itensDoMenu(selecionados(), cam, recarregar),
       '-',
       { rotulo: 'Apagar', icone: 'apagar', acao: apagar },
     ]);

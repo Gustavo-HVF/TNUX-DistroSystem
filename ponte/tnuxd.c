@@ -916,7 +916,7 @@ static void api_trabalhos(Con *c, const Req *r, const char *op) {
         char j[64];
         snprintf(j, sizeof j, "{\"id\":%d,\"ajudantes\":%d}", t->id, ajudantes_ativos());
         resp_json(c, 200, j);
-    } else if (!strcmp(op, "pegar")) {
+    } else if (!strcmp(op, "pegar") || !strcmp(op, "presente")) {
         char quem[64], caps[256], nuc[16];
         parametro(r, "quem", quem, sizeof quem); parametro(r, "caps", caps, sizeof caps); parametro(r, "nucleos", nuc, sizeof nuc);
         if (!quem[0]) { resp_erro(c, 400, "informe quem="); return; }
@@ -925,6 +925,13 @@ static void api_trabalhos(Con *c, const Req *r, const char *op) {
         for (int i = 0; i < MAX_AJUD && !a; i++) if (!strcmp(ajudantes[i].nome, quem)) a = &ajudantes[i];
         for (int i = 0; i < MAX_AJUD && !a; i++) if (!ajudantes[i].nome[0] || agora - ajudantes[i].visto > 60) a = &ajudantes[i];
         if (a) { snprintf(a->nome, sizeof a->nome, "%s", quem); snprintf(a->caps, sizeof a->caps, "%s", caps); a->nucleos = atoi(nuc); a->visto = agora; }
+        if (!strcmp(op, "presente")) {             /* "continuo aqui, trabalhando": não pega outro trabalho */
+            parametro(r, "id", v, sizeof v);
+            Trab *ocupado = trab_achar(atoi(v));
+            if (ocupado && ocupado->estado == T_RODANDO && !strcmp(ocupado->quem, quem)) ocupado->tocado = agora;
+            resp_json(c, 200, ocupado && ocupado->estado != T_RODANDO ? "{\"ok\":true,\"cancelado\":true}" : "{\"ok\":true}");
+            return;
+        }
         Trab *t = NULL;
         for (int i = 0; i < MAX_TRAB; i++) {
             if (trabs[i].estado != T_FILA) continue;
