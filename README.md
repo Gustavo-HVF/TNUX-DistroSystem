@@ -171,6 +171,58 @@ programas gráficos que você abrir pelo menu aparecem ali. (Por baixo é um ser
 `Xvnc`, ligado por um socket que só este usuário alcança.) Se o aparelho já tem uma tela gráfica
 própria, os programas abrem nela.
 
+### Compartilhar pela internet (Cloudflare)
+
+Para abrir o TNUX do aparelho de qualquer lugar (de outra casa, pelo 4G, no computador do trabalho),
+o TNUX cria um link `https://….trycloudflare.com` pelo túnel gratuito da Cloudflare, sem conta e sem
+abrir portas no roteador. Primeiro instale o `cloudflared`:
+
+```bash
+tnux instalar cloudflared
+```
+
+Depois, ou ligue a área de trabalho já com o link:
+
+```bash
+tnux desktop --tunel
+```
+
+ou ligue o link numa ponte que já está rodando:
+
+```bash
+tnux compartilhar
+```
+
+O link aparece no terminal com um **QR code** (aponte a câmera de outro celular). Na área de
+trabalho, o programa **Compartilhar pela internet** faz o mesmo, com o botão de copiar o link e o QR
+code. Para desligar:
+
+```bash
+tnux compartilhar --parar
+```
+
+- O link tem uma **chave própria**, diferente da chave do aparelho, e ela **deixa de valer quando o
+  túnel é desligado**. Ao ligar de novo, sai um link novo.
+- **Quem tiver o link controla o aparelho como você** (terminal, arquivos, programas). Mande só
+  para quem você confia.
+- O endereço `trycloudflare.com` muda toda vez que o túnel liga. Isso é do serviço gratuito da
+  Cloudflare.
+
+### O LNUX dentro do TNUX
+
+O [LNUX](https://github.com/Gustavo-HVF/Termux-Toons), do mesmo autor, se instala com
+`tnux instalar lnux` e passa a fazer parte do sistema:
+
+- **na área de trabalho**, o programa **LNUX** mostra as opções dele por categoria: geral, música e
+  vídeo, rede, celular, e jogos e programação. Cada opção abre num terminal; as que precisam de um
+  link, um arquivo ou uma pasta perguntam antes. As que só funcionam no Termux aparecem apagadas nas
+  distros;
+- **no terminal**, `tnux lnux` abre o menu completo do LNUX, e `tnux lnux OPÇÃO` roda uma opção
+  direto. Exemplos: `tnux lnux ficha`, `tnux lnux baixar "nome da música"`, `tnux lnux pasta ~/Fotos`.
+
+O TNUX acha o LNUX em `~/LNUX`, `~/Termux-Toons`, pelo apelido `lnux` do `~/.bashrc`, ou onde a
+variável `LNUX_PY` disser.
+
 ### O computador fazendo o serviço pesado do celular
 
 Um celular tem pouco processador e pouca memória. Se você abrir o TNUX do celular **no navegador de um
@@ -234,8 +286,9 @@ não está entre os trabalhos.
 - A chave não fica em cookie, e os apps web instalados são servidos por outro nome de host e por uma
   chave separada, que só dá acesso à pasta deles: um app baixado não alcança o terminal nem os
   arquivos.
-- Com `--rede` a conexão **não é cifrada**: use só numa rede de confiança (a de casa). Em redes
-  públicas, prefira um túnel SSH.
+- Com `--rede` a conexão **não é cifrada**: use só numa rede de confiança (a de casa). Fora de
+  casa, use o link da Cloudflare (`--tunel`), que é https.
+- O link da Cloudflare usa uma chave separada, que deixa de valer quando o túnel desliga.
 
 ### Experimentar o sistema do navegador no terminal
 
@@ -282,7 +335,8 @@ Para pôr um programa ou app no catálogo, acrescente uma entrada em `web/catalo
 nucleo/       o núcleo, em C: sistema de arquivos em memória, shell, comandos, apt, git, WASI
 libc/         a libc mínima do núcleo no navegador (malloc, strings, snprintf, qsort)
 plataforma/   a fronteira do núcleo: wasm.c (navegador) e nativo.c (terminal)
-ponte/        tnux.c (o shell e o "tnux pc") e tnuxd.c (servidor: HTTP, WebSocket, PTY, tela, fila)
+ponte/        tnux.c (o shell, "tnux pc", "tnux lnux", "tnux compartilhar"), tnuxd.c (servidor: HTTP,
+              WebSocket, PTY, tela, fila, túnel) e qr.h (gerador de QR code)
 programas/    SDK e programas de exemplo em C para o modo navegador
 web/          a área de trabalho: index.html, css/, js/, o núcleo compilado (tnux.wasm) e o catálogo
 tests/        testes do núcleo, da ponte e da área de trabalho
@@ -321,11 +375,15 @@ make teste
 ## O que foi e o que não foi testado
 
 Testado automaticamente neste repositório: o núcleo (terminal e WebAssembly), `git clone` e `apt`
-contra o GitHub de verdade, a ponte (chave, arquivos, terminal, fila, tela VNC), a área de trabalho no
-Chromium (modo navegador, celular e ponte), um programa gráfico real aparecendo na tela do TNUX, e o
-`tnux pc` de ponta a ponta. Tudo em Linux x86-64.
+contra o GitHub de verdade, a ponte (chave, arquivos, terminal, fila, tela VNC, túnel), a área de
+trabalho no Chromium (modo navegador, celular e ponte), um programa gráfico real aparecendo na tela
+do TNUX, o `tnux pc` de ponta a ponta, as opções do LNUX pela área de trabalho, e o gerador de QR code
+(660 QR codes lidos de volta pelo zxing-cpp, versões 1 a 15). Tudo em Linux x86-64.
 
-**Não testado:** a execução dentro do Termux num celular de verdade; a instalação dos pacotes nativos
+**Não testado:** a execução dentro do Termux num celular de verdade; **um túnel real da
+Cloudflare**: o ambiente de testes não alcança a Cloudflare, então o túnel foi testado com um
+`cloudflared` simulado, que escreve as mesmas mensagens do verdadeiro; as opções do LNUX de verdade,
+além da ficha do sistema (os testes usam um LNUX simulado); a instalação dos pacotes nativos
 do catálogo em cada distribuição (os nomes de pacote para `pkg`, `pacman`, `dnf`, `apk` e `zypper`
 foram escritos de memória e podem precisar de ajuste); os sites externos do catálogo (Photopea,
 diagrams.net) e do Navegador, que dependem de cada site aceitar ser aberto dentro de uma janela; e

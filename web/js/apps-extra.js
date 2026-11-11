@@ -217,6 +217,8 @@ Apps.config = (aba) => {
           linha('Aparelho', null, h('span.val', null, i.sistema)), linha('Usuário', null, h('span.val', null, `${i.usuario}@${i.host}`)),
           linha('Pasta pessoal', null, h('span.val', null, i.casa)), linha('Gerenciador de pacotes', null, h('span.val', null, i.gerenciador || 'não reconhecido')),
           linha('Tela para programas gráficos', i.tela_disponivel ? 'Servidor de tela instalado' : 'Instale com: tnux instalar tela', h('button.btn', { onclick: () => Apps.tela() }, 'Abrir a tela')),
+          linha('Compartilhar pela internet', i.tunel_ativo ? 'O link da Cloudflare está ligado' : 'Um link https da Cloudflare para abrir de qualquer lugar', h('button.btn', { onclick: () => Apps.compartilhar() }, i.tunel_ativo ? 'Ver o link' : 'Criar o link')),
+          linha('LNUX', i.lnux ? 'Instalado em ' + i.lnux : 'Não instalado', h('button.btn', { onclick: () => Apps.lnux() }, 'Abrir')),
           linha('Sair do modo ponte', 'Esquece a chave nesta aba e volta ao TNUX do navegador', h('button.btn', { onclick: () => { sessionStorage.removeItem('tnux_token'); location.reload(); } }, 'Sair'))));
       } else {
         const uso = h('span.val', null, 'calculando...');

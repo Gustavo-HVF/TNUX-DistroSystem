@@ -349,7 +349,10 @@ const Desktop = (() => {
     let itens = lista;
     if (termo) { const t = semAcento(termo); itens = lista.filter((a) => semAcento(a.nome).includes(t) || semAcento(a.resumo || '').includes(t) || a.id.includes(t)); }
     else if (catSel !== 'Todos') itens = lista.filter((a) => a.categoria === catSel);
-    itens = itens.slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    /* na busca, primeiro quem começa com o termo, depois quem o tem no nome, depois o resto */
+    const t2 = termo ? semAcento(termo) : '';
+    const nota = (x) => (!t2 ? 0 : semAcento(x.nome).startsWith(t2) ? 0 : semAcento(x.nome).includes(t2) ? 1 : 2);
+    itens = itens.slice().sort((a, b) => nota(a) - nota(b) || a.nome.localeCompare(b.nome, 'pt-BR'));
     const caixa = $('#menu-apps');
     caixa.replaceChildren(...itens.map(botaoApp));
     if (!itens.length) caixa.append(h('div.vazio', null, termo ? `Nada encontrado para "${busca.value}".` : 'Nenhum programa nesta categoria.'));

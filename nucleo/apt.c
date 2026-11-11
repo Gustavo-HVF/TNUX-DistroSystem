@@ -37,6 +37,8 @@ static const Interno INTERNOS[] = {
     { "calculadora", "Calculadora", "Faça contas", "calculadora", "Acessórios", 0 },
     { "sobre", "Informações do Sistema", "Versão do TNUX e dados do aparelho", "info", "Preferências", 0 },
     { "processamento", "Processamento no computador", "O computador faz o serviço pesado para o aparelho", "monitor", "Sistema", 0 },
+    { "lnux", "LNUX", "O canivete suíço do terminal (no modo ponte)", "lnux", "Acessórios", 0 },
+    { "compartilhar", "Compartilhar pela internet", "Um link https para abrir o TNUX do aparelho de qualquer lugar (modo ponte)", "compartilhar", "Internet", 0 },
     { "boasvindas", "Bem-vindo", "Primeiros passos no TNUX", "tnux", "Sistema", 0 },
     { NULL, NULL, NULL, NULL, NULL, 0 }
 };
