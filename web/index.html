@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#1f2a24">
+<meta name="description" content="TNUX: um sistema no estilo do Linux Mint que roda no navegador, com terminal, arquivos e instalação de programas.">
+<title>TNUX</title>
+<link rel="icon" href="img/tnux.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<link rel="stylesheet" href="css/tnux.css">
+</head>
+<body>
+<!-- tela de boot -->
+<div id="boot">
+  <div class="boot-logo" id="boot-logo"></div>
+  <div class="boot-nome">TNUX</div>
+  <div class="boot-barra"><i></i></div>
+  <div class="boot-passo" id="boot-passo">Iniciando</div>
+  <noscript><p class="boot-erro">O TNUX precisa de JavaScript e WebAssembly ligados no navegador.</p></noscript>
+</div>
+
+<!-- área de trabalho -->
+<div id="area" hidden>
+  <div id="fundo"></div>
+  <div id="icones"></div>
+  <div id="janelas"></div>
+  <div id="avisos" aria-live="polite"></div>
+</div>
+
+<!-- painel -->
+<div id="painel" hidden>
+  <button id="btn-menu" title="Menu" aria-label="Menu de aplicativos"></button>
+  <div id="atalhos"></div>
+  <div id="lista-janelas"></div>
+  <div id="bandeja">
+    <button id="ind-modo" title="Modo do sistema"></button>
+    <button id="relogio" title="Data e hora"></button>
+  </div>
+</div>
+
+<!-- menu de aplicativos -->
+<div id="menu" hidden>
+  <div class="menu-lado" id="menu-lado"></div>
+  <div class="menu-centro">
+    <input id="menu-busca" type="search" placeholder="Digite para procurar..." autocomplete="off" spellcheck="false" aria-label="Procurar aplicativos">
+    <div class="menu-colunas">
+      <div class="menu-cats" id="menu-cats"></div>
+      <div class="menu-apps" id="menu-apps"></div>
+    </div>
+    <div class="menu-desc" id="menu-desc"></div>
+  </div>
+</div>
+
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
+<script src="js/icones.js"></script>
+<script src="js/sistema.js"></script>
+<script src="js/desktop.js"></script>
+<script src="js/apps-base.js"></script>
+<script src="js/apps-extra.js"></script>
+<script src="js/tela.js"></script>
+<script src="js/processador.js"></script>
+<script src="js/principal.js"></script>
+</body>
+</html>

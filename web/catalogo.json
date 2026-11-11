@@ -1,0 +1,498 @@
+{
+ "esquema": "tnux-catalogo/1",
+ "comentario": "Catálogo de programas do TNUX. tipo: wasm (programa WebAssembly), git (repositório do GitHub baixado para /opt), web (site numa janela) ou nativo (programa Linux instalado pelo aparelho no modo ponte).",
+ "categorias": [
+  "Acessórios",
+  "Escritório",
+  "Gráficos",
+  "Internet",
+  "Jogos",
+  "Programação",
+  "Som e vídeo",
+  "Sistema",
+  "Preferências",
+  "Outros"
+ ],
+ "pacotes": [
+  {
+   "id": "ola",
+   "nome": "Olá",
+   "resumo": "Programa de exemplo em C: mostra argumentos e grava um arquivo",
+   "categoria": "Programação",
+   "icone": "terminal",
+   "tipo": "wasm",
+   "versao": "1.0",
+   "url": "programas/ola.wasm",
+   "comando": "ola",
+   "licenca": "MIT"
+  },
+  {
+   "id": "vaca",
+   "nome": "Vaca",
+   "resumo": "A vaquinha que fala no terminal (estilo cowsay)",
+   "categoria": "Jogos",
+   "icone": "terminal",
+   "tipo": "wasm",
+   "versao": "1.0",
+   "url": "programas/vaca.wasm",
+   "comando": "vaca",
+   "apelidos": [
+    "cowsay"
+   ],
+   "licenca": "MIT"
+  },
+  {
+   "id": "primos",
+   "nome": "Primos",
+   "resumo": "Calcula números primos e mede a velocidade do aparelho",
+   "categoria": "Programação",
+   "icone": "terminal",
+   "tipo": "wasm",
+   "versao": "1.0",
+   "url": "programas/primos.wasm",
+   "comando": "primos",
+   "licenca": "MIT"
+  },
+  {
+   "id": "lnux-video",
+   "nome": "Vídeo (LNUX)",
+   "resumo": "Editor de vídeo no jeito do Premiere, no navegador",
+   "categoria": "Som e vídeo",
+   "icone": "video",
+   "tipo": "git",
+   "versao": "1.0",
+   "repo": "Gustavo-HVF/LNUX-APPs",
+   "pastas": "apps/video/,comum/",
+   "entrada": "apps/video/index.html",
+   "licenca": "MIT"
+  },
+  {
+   "id": "lnux-efeitos",
+   "nome": "Efeitos (LNUX)",
+   "resumo": "Animação de títulos e gráficos com quadros-chave",
+   "categoria": "Som e vídeo",
+   "icone": "video",
+   "tipo": "git",
+   "versao": "1.0",
+   "repo": "Gustavo-HVF/LNUX-APPs",
+   "pastas": "apps/efeitos/,comum/",
+   "entrada": "apps/efeitos/index.html",
+   "licenca": "MIT"
+  },
+  {
+   "id": "lnux-som",
+   "nome": "Som (LNUX)",
+   "resumo": "Estúdio de áudio multipistas: gravar, cortar, mixar",
+   "categoria": "Som e vídeo",
+   "icone": "som",
+   "tipo": "git",
+   "versao": "1.0",
+   "repo": "Gustavo-HVF/LNUX-APPs",
+   "pastas": "apps/som/,comum/",
+   "entrada": "apps/som/index.html",
+   "licenca": "MIT"
+  },
+  {
+   "id": "lnux-vlc",
+   "nome": "VLC-Web (LNUX)",
+   "resumo": "Player de vídeo e música com legendas, equalizador e temas",
+   "categoria": "Som e vídeo",
+   "icone": "video",
+   "tipo": "git",
+   "versao": "1.0",
+   "repo": "Gustavo-HVF/LNUX-APPs",
+   "pastas": "apps/vlc-web/,comum/",
+   "entrada": "apps/vlc-web/index.html",
+   "licenca": "MIT"
+  },
+  {
+   "id": "lnux-companhia",
+   "nome": "Companhia (LNUX)",
+   "resumo": "Converse com personagens Live2D e VRoid, com IA e voz",
+   "categoria": "Internet",
+   "icone": "web",
+   "tipo": "git",
+   "versao": "1.0",
+   "repo": "Gustavo-HVF/LNUX-APPs",
+   "pastas": "apps/companhia/,comum/",
+   "entrada": "apps/companhia/index.html",
+   "licenca": "MIT"
+  },
+  {
+   "id": "photopea",
+   "nome": "Photopea",
+   "resumo": "Editor de imagens online (abre PSD, XCF, RAW)",
+   "categoria": "Gráficos",
+   "icone": "imagem",
+   "tipo": "web",
+   "versao": "web",
+   "url": "https://www.photopea.com/"
+  },
+  {
+   "id": "diagramas",
+   "nome": "Diagramas (draw.io)",
+   "resumo": "Fluxogramas e diagramas online",
+   "categoria": "Escritório",
+   "icone": "web",
+   "tipo": "web",
+   "versao": "web",
+   "url": "https://embed.diagrams.net/?ui=min&lang=pt-br",
+   "apelidos": [
+    "drawio",
+    "draw.io"
+   ]
+  },
+  {
+   "id": "chrome",
+   "nome": "Google Chrome",
+   "resumo": "O navegador do Google",
+   "categoria": "Internet",
+   "icone": "navegador",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "google-chrome",
+    "google-chrome-stable"
+   ],
+   "nativo": {
+    "exec": "google-chrome-stable",
+    "comandos": {
+     "apt": "wget -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install -y /tmp/google-chrome.deb; rm -f /tmp/google-chrome.deb",
+     "dnf": "sudo dnf install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm",
+     "zypper": "sudo zypper --non-interactive --no-gpg-checks install https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm"
+    },
+    "so_x86_64": true,
+    "alternativa": "chromium",
+    "nota": "O Google só publica o Chrome para Linux em computadores x86 de 64 bits. Em celular (Termux), ARM, Arch e Alpine, use o Chromium, que é o Chrome sem as partes do Google."
+   }
+  },
+  {
+   "id": "chromium",
+   "nome": "Chromium",
+   "resumo": "O navegador de código aberto que é a base do Chrome",
+   "categoria": "Internet",
+   "icone": "navegador",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "chromium-browser"
+   ],
+   "nativo": {
+    "exec": "chromium",
+    "apt": "chromium",
+    "termux": "chromium",
+    "termux_repos": "x11-repo tur-repo",
+    "pacman": "chromium",
+    "dnf": "chromium",
+    "apk": "chromium",
+    "zypper": "chromium"
+   }
+  },
+  {
+   "id": "firefox",
+   "nome": "Firefox",
+   "resumo": "O navegador da Mozilla",
+   "categoria": "Internet",
+   "icone": "navegador",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "firefox",
+    "apt": "firefox",
+    "termux": "firefox",
+    "termux_repos": "x11-repo",
+    "pacman": "firefox",
+    "dnf": "firefox",
+    "apk": "firefox",
+    "zypper": "MozillaFirefox"
+   }
+  },
+  {
+   "id": "vlc",
+   "nome": "VLC",
+   "resumo": "Player de vídeo e música",
+   "categoria": "Som e vídeo",
+   "icone": "video",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "vlc",
+    "apt": "vlc",
+    "termux": "vlc-qt",
+    "termux_repos": "x11-repo",
+    "pacman": "vlc",
+    "dnf": "vlc",
+    "apk": "vlc",
+    "zypper": "vlc"
+   }
+  },
+  {
+   "id": "gimp",
+   "nome": "GIMP",
+   "resumo": "Editor de imagens",
+   "categoria": "Gráficos",
+   "icone": "imagem",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "gimp",
+    "apt": "gimp",
+    "termux": "gimp",
+    "termux_repos": "x11-repo",
+    "pacman": "gimp",
+    "dnf": "gimp",
+    "apk": "gimp",
+    "zypper": "gimp"
+   }
+  },
+  {
+   "id": "inkscape",
+   "nome": "Inkscape",
+   "resumo": "Desenho vetorial",
+   "categoria": "Gráficos",
+   "icone": "imagem",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "inkscape",
+    "apt": "inkscape",
+    "termux": "inkscape",
+    "termux_repos": "x11-repo",
+    "pacman": "inkscape",
+    "dnf": "inkscape",
+    "apk": "inkscape",
+    "zypper": "inkscape"
+   }
+  },
+  {
+   "id": "libreoffice",
+   "nome": "LibreOffice",
+   "resumo": "Textos, planilhas e apresentações",
+   "categoria": "Escritório",
+   "icone": "editor",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "libreoffice",
+    "apt": "libreoffice",
+    "pacman": "libreoffice-fresh",
+    "dnf": "libreoffice",
+    "apk": "libreoffice",
+    "zypper": "libreoffice"
+   }
+  },
+  {
+   "id": "audacity",
+   "nome": "Audacity",
+   "resumo": "Editor de áudio",
+   "categoria": "Som e vídeo",
+   "icone": "som",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "audacity",
+    "apt": "audacity",
+    "termux": "audacity",
+    "termux_repos": "x11-repo",
+    "pacman": "audacity",
+    "dnf": "audacity",
+    "apk": "audacity",
+    "zypper": "audacity"
+   }
+  },
+  {
+   "id": "code",
+   "nome": "Visual Studio Code",
+   "resumo": "Editor de código (versão de código aberto: Code - OSS)",
+   "categoria": "Programação",
+   "icone": "editor",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "vscode",
+    "code-oss"
+   ],
+   "nativo": {
+    "exec": "code",
+    "termux": "code-oss",
+    "termux_repos": "x11-repo tur-repo",
+    "pacman": "code",
+    "comandos": {
+     "apt": "wget -O /tmp/vscode.deb 'https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64' && sudo apt install -y /tmp/vscode.deb; rm -f /tmp/vscode.deb"
+    }
+   }
+  },
+  {
+   "id": "python",
+   "nome": "Python 3",
+   "resumo": "Linguagem de programação Python",
+   "categoria": "Programação",
+   "icone": "terminal",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "python3"
+   ],
+   "nativo": {
+    "exec": "python3",
+    "terminal": true,
+    "apt": "python3 python3-pip",
+    "termux": "python",
+    "pacman": "python python-pip",
+    "dnf": "python3 python3-pip",
+    "apk": "python3 py3-pip",
+    "zypper": "python3 python3-pip"
+   }
+  },
+  {
+   "id": "nodejs",
+   "nome": "Node.js",
+   "resumo": "JavaScript fora do navegador",
+   "categoria": "Programação",
+   "icone": "terminal",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "node",
+    "npm"
+   ],
+   "nativo": {
+    "exec": "node",
+    "terminal": true,
+    "apt": "nodejs npm",
+    "termux": "nodejs",
+    "pacman": "nodejs npm",
+    "dnf": "nodejs",
+    "apk": "nodejs npm",
+    "zypper": "nodejs npm"
+   }
+  },
+  {
+   "id": "gcc",
+   "nome": "Compilador C/C++",
+   "resumo": "gcc, g++ e make (no Termux: clang)",
+   "categoria": "Programação",
+   "icone": "terminal",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "build-essential",
+    "g++",
+    "make",
+    "clang"
+   ],
+   "nativo": {
+    "exec": "cc",
+    "terminal": true,
+    "apt": "build-essential",
+    "termux": "clang make",
+    "pacman": "base-devel",
+    "dnf": "gcc gcc-c++ make",
+    "apk": "build-base",
+    "zypper": "gcc gcc-c++ make"
+   }
+  },
+  {
+   "id": "htop",
+   "nome": "htop",
+   "resumo": "Monitor de processos no terminal",
+   "categoria": "Sistema",
+   "icone": "monitor",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "htop",
+    "terminal": true,
+    "apt": "htop",
+    "termux": "htop",
+    "pacman": "htop",
+    "dnf": "htop",
+    "apk": "htop",
+    "zypper": "htop"
+   }
+  },
+  {
+   "id": "neovim",
+   "nome": "Neovim",
+   "resumo": "Editor de texto no terminal",
+   "categoria": "Programação",
+   "icone": "editor",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "nvim"
+   ],
+   "nativo": {
+    "exec": "nvim",
+    "terminal": true,
+    "apt": "neovim",
+    "termux": "neovim",
+    "pacman": "neovim",
+    "dnf": "neovim",
+    "apk": "neovim",
+    "zypper": "neovim"
+   }
+  },
+  {
+   "id": "ffmpeg",
+   "nome": "FFmpeg",
+   "resumo": "Converte e edita vídeo e áudio pela linha de comando",
+   "categoria": "Som e vídeo",
+   "icone": "video",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "nativo": {
+    "exec": "ffmpeg",
+    "terminal": true,
+    "apt": "ffmpeg",
+    "termux": "ffmpeg",
+    "pacman": "ffmpeg",
+    "dnf": "ffmpeg-free",
+    "apk": "ffmpeg",
+    "zypper": "ffmpeg"
+   }
+  },
+  {
+   "id": "lnux",
+   "nome": "LNUX",
+   "resumo": "Canivete suíço para o terminal (do mesmo autor)",
+   "categoria": "Sistema",
+   "icone": "terminal",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "termux-toons"
+   ],
+   "nativo": {
+    "exec": "lnux",
+    "terminal": true,
+    "comandos": {
+     "*": "git clone https://github.com/Gustavo-HVF/Termux-Toons \"$HOME/LNUX\" && bash \"$HOME/LNUX/instalar.sh\""
+    }
+   }
+  },
+  {
+   "id": "tela",
+   "nome": "Tela para programas gráficos",
+   "resumo": "Servidor de tela (VNC) para ver os programas gráficos do aparelho dentro do TNUX",
+   "categoria": "Sistema",
+   "icone": "monitor",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "vnc",
+    "tigervnc"
+   ],
+   "nativo": {
+    "exec": "Xvnc",
+    "apt": "tigervnc-standalone-server openbox",
+    "termux": "tigervnc openbox",
+    "termux_repos": "x11-repo",
+    "pacman": "tigervnc openbox",
+    "dnf": "tigervnc-server openbox",
+    "apk": "tigervnc openbox",
+    "zypper": "tigervnc openbox"
+   }
+  }
+ ]
+}

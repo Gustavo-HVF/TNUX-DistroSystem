@@ -1,0 +1,12 @@
+{
+  "name": "TNUX",
+  "short_name": "TNUX",
+  "description": "Um sistema no estilo do Linux Mint que roda no navegador.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1f2a24",
+  "theme_color": "#1f2a24",
+  "lang": "pt-BR",
+  "icons": [{ "src": "img/tnux.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
