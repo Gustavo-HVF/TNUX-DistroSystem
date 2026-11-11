@@ -17,6 +17,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../nucleo/tnux.h"
 #include "comum.h"
+#include "qr.h"
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
@@ -614,6 +615,91 @@ static int pc_main(int argc, char **argv) {
     return r;
 }
 
+/* ------------------------------------------------------------------ o LNUX, do mesmo autor */
+
+/* roda o LNUX com estes argumentos (sem argumentos: o menu completo). */
+static int lnux_main(int argc, char **argv) {
+    char py[4200];
+    if (!achar_lnux(py, sizeof py)) {
+        fprintf(stderr, "tnux: o LNUX não está instalado neste aparelho.\n"
+                        "Instale com:  tnux instalar lnux\n"
+                        "(ou diga onde ele está: export LNUX_PY=/caminho/para/lnux.py)\n");
+        return 127;
+    }
+    const char *python = tem_comando("python3") ? "python3" : tem_comando("python") ? "python" : NULL;
+    if (!python) { fprintf(stderr, "tnux: o LNUX precisa do Python. Instale com: tnux instalar python\n"); return 127; }
+    char **av = xmalloc(sizeof(char *) * (size_t)(argc + 3));
+    int n = 0;
+    av[n++] = (char *)python;
+    av[n++] = py;
+    for (int i = 1; i < argc; i++) av[n++] = argv[i];
+    av[n] = NULL;
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL); signal(SIGQUIT, SIG_DFL); signal(SIGTSTP, SIG_DFL);
+        execvp(python, av);
+        perror("tnux: python");
+        _exit(127);
+    }
+    free(av);
+    if (pid < 0) { perror("tnux: fork"); return 127; }
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0);
+}
+
+/* tnux compartilhar: liga o túnel da Cloudflare na ponte que já está rodando e mostra o link */
+static int compartilhar_main(int argc, char **argv) {
+    int parar_tunel = argc > 1 && (!strcmp(argv[1], "--parar") || !strcmp(argv[1], "parar"));
+    if (!pc_achar_ponte()) {
+        fprintf(stderr, "tnux: a ponte não está ligada. Ligue já com o túnel:  tnux desktop --tunel\n");
+        return 1;
+    }
+    Buf r; buf_init(&r);
+    if (parar_tunel) {
+        int st = pc_http("POST", "/api/tunel/parar", NULL, 0, &r);
+        buf_free(&r);
+        if (st != 200) { fprintf(stderr, "tnux: a ponte não respondeu\n"); return 1; }
+        printf("Túnel desligado: o link deixou de funcionar.\n");
+        return 0;
+    }
+    int st = pc_http("POST", "/api/tunel/iniciar", NULL, 0, &r);
+    JVal *j = json_ler(buf_str(&r), r.n);
+    if (st != 200) { fprintf(stderr, "tnux: %s\n", j ? json_texto(j, "erro", "a ponte recusou") : "a ponte não respondeu"); json_livrar(j); buf_free(&r); return 1; }
+    json_livrar(j);
+    fprintf(stderr, "Ligando o túnel da Cloudflare...");
+    for (int i = 0; i < 90; i++) {
+        r.n = 0;
+        st = pc_http("GET", "/api/tunel/estado", NULL, 0, &r);
+        j = st == 200 ? json_ler(buf_str(&r), r.n) : NULL;
+        if (!j) break;
+        const char *link = json_texto(j, "link", ""), *erro = json_texto(j, "erro", "");
+        if (*link) {
+            fprintf(stderr, "\r\x1b[K");
+            printf("\n  \x1b[1;32mLink pela internet:\x1b[0m\n\n    \x1b[1;36m%s\x1b[0m\n\n", link);
+            Qr q;
+            if (isatty(1) && !qr_gerar(&q, link)) { qr_terminal(&q, stdout); printf("\n"); }
+            printf("  \x1b[33mQuem tiver este link controla este aparelho como você.\x1b[0m\n"
+                   "  Para desligar o link:  tnux compartilhar --parar\n");
+            json_livrar(j);
+            buf_free(&r);
+            return 0;
+        }
+        if (!json_numero(j, "ativo", 0)) {
+            fprintf(stderr, "\r\x1b[Ktnux: o túnel não ligou: %s\n", *erro ? erro : "motivo desconhecido (veja ~/.tnux/tunel.log)");
+            json_livrar(j);
+            buf_free(&r);
+            return 1;
+        }
+        json_livrar(j);
+        usleep(500000);
+    }
+    fprintf(stderr, "\r\x1b[Ktnux: o endereço do túnel não apareceu em 45 segundos (veja ~/.tnux/tunel.log)\n");
+    buf_free(&r);
+    return 1;
+}
+
 /* ------------------------------------------------------------------ informações do sistema */
 
 static void banner(void) {
@@ -665,6 +751,9 @@ static void ajuda(void) {
            "  tnux desktop           liga a área de trabalho (abre no navegador)\n"
            "  tnux desktop --rede    idem, e deixa um computador da rede abrir o TNUX deste aparelho\n"
            "  tnux pc ...            manda o serviço pesado para esse computador (veja: tnux pc ajuda)\n"
+           "  tnux desktop --tunel   idem, com um link https da Cloudflare para abrir de qualquer lugar\n"
+           "  tnux compartilhar      liga esse link numa ponte já ligada (--parar desliga)\n"
+           "  tnux lnux [opção]      o LNUX: sem nada abre o menu; ex.: tnux lnux ficha, tnux lnux baixar MÚSICA\n"
            "  tnux fetch             informações do sistema\n"
            "  tnux --sandbox         o TNUX do navegador rodando aqui, isolado do aparelho\n"
            "  exit                   sai\n\n"
@@ -843,6 +932,15 @@ static int interno(char *linha, int *codigo, int *sair, Editor *ed) {
     if (EH("unset") && simples && *resto) { unsetenv(resto); *codigo = 0; return 1; }
     if ((EH("help") || EH("ajuda")) && !*resto) { ajuda(); *codigo = 0; return 1; }
     if (EH("history") && !*resto) { for (int i = 0; i < ed_hist_n(ed); i++) printf("%5d  %s\n", i + 1, ed_hist(ed, i)); *codigo = 0; return 1; }
+    if (EH("lnux") && !tem_comando("lnux")) {
+        char py[4200];
+        if (achar_lnux(py, sizeof py)) {
+            char *cmd = xasprintf("%s '%s' %s", tem_comando("python3") ? "python3" : "python", py, resto);
+            *codigo = rodar_sh(cmd);
+            free(cmd);
+            return 1;
+        }
+    }
     if ((EH("apt") || EH("apt-get") || EH("tnux")) && simples) {
         /* separa os argumentos (aspas simples e duplas) e chama o próprio tnux */
         char *copia = xstrdup(p);
@@ -865,6 +963,8 @@ static int interno(char *linha, int *codigo, int *sair, Editor *ed) {
             else if (ac >= 2 && (!strcmp(av[1], "remover") || !strcmp(av[1], "remove"))) { av[1] = "remove"; *codigo = apt_ponte(ac, av); }
             else if (ac >= 2 && !strcmp(av[1], "apt")) *codigo = apt_ponte(ac - 1, av + 1);
             else if (ac >= 2 && (!strcmp(av[1], "pc") || !strcmp(av[1], "computador"))) *codigo = pc_main(ac - 1, av + 1);
+            else if (ac >= 2 && !strcmp(av[1], "lnux")) *codigo = lnux_main(ac - 1, av + 1);
+            else if (ac >= 2 && (!strcmp(av[1], "compartilhar") || !strcmp(av[1], "link") || !strcmp(av[1], "tunel"))) *codigo = compartilhar_main(ac - 1, av + 1);
             else if (ac >= 2 && (!strcmp(av[1], "fetch") || !strcmp(av[1], "neofetch"))) { banner(); *codigo = 0; }
             else if (ac == 1 || !strcmp(av[1], "ajuda") || !strcmp(av[1], "help")) { ajuda(); *codigo = 0; }
             else if (!strcmp(av[1], "versao") || !strcmp(av[1], "--version")) { printf("%s %s (%s), modo ponte\n", TNUX_NOME, TNUX_VERSAO, TNUX_CODINOME); *codigo = 0; }
@@ -973,6 +1073,8 @@ int main(int argc, char **argv) {
         if (!strcmp(a, "--sandbox") || !strcmp(a, "sandbox")) return sandbox_main(argc - 1, argv + 1);
         if (!strcmp(a, "desktop") || !strcmp(a, "area-de-trabalho")) return desktop(argc - 2, argv + 2);
         if (!strcmp(a, "pc") || !strcmp(a, "computador")) return pc_main(argc - 1, argv + 1);
+        if (!strcmp(a, "lnux")) return lnux_main(argc - 1, argv + 1);
+        if (!strcmp(a, "compartilhar") || !strcmp(a, "link") || !strcmp(a, "tunel")) return compartilhar_main(argc - 1, argv + 1);
         if (!strcmp(a, "apt") || !strcmp(a, "apt-get")) return apt_ponte(argc - 1, argv + 1);
         if (!strcmp(a, "instalar") || !strcmp(a, "install")) { argv[1] = "install"; return apt_ponte(argc, argv); }
         if (!strcmp(a, "remover") || !strcmp(a, "remove")) { argv[1] = "remove"; return apt_ponte(argc, argv); }

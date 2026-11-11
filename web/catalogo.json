@@ -493,6 +493,27 @@
     "apk": "tigervnc openbox",
     "zypper": "tigervnc openbox"
    }
+  },
+  {
+   "id": "cloudflared",
+   "nome": "Cloudflare Tunnel",
+   "resumo": "Cria um link https para abrir o TNUX deste aparelho de qualquer lugar (tnux compartilhar)",
+   "categoria": "Internet",
+   "icone": "navegador",
+   "tipo": "nativo",
+   "versao": "aparelho",
+   "apelidos": [
+    "cloudflare",
+    "tunel",
+    "túnel"
+   ],
+   "nativo": {
+    "exec": "cloudflared",
+    "comandos": {
+     "termux": "pkg install -y cloudflared",
+     "*": "case \"$(uname -m)\" in x86_64) a=amd64;; aarch64|arm64) a=arm64;; armv7l|armv6l) a=arm;; i?86) a=386;; *) echo \"arquitetura não suportada: $(uname -m)\"; exit 1;; esac; mkdir -p \"$HOME/.local/bin\" && curl -fL -o \"$HOME/.local/bin/cloudflared\" \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$a\" && chmod +x \"$HOME/.local/bin/cloudflared\" && echo \"cloudflared instalado em $HOME/.local/bin\""
+    }
+   }
   }
  ]
 }

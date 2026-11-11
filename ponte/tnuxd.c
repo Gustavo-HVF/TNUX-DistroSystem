@@ -9,13 +9,15 @@
  *   - /c/CHAVE/... os apps web instalados em ~/.tnux/apps, isolados da área de trabalho;
  *   - /api/lancar  abre um programa gráfico do aparelho;
  *   - /ws/tela     a tela (VNC) em que esses programas aparecem, vista de dentro do TNUX;
- *   - /api/trabalhos  a fila pela qual um computador faz o processamento pesado para o aparelho.
+ *   - /api/trabalhos  a fila pela qual um computador faz o processamento pesado para o aparelho;
+ *   - /api/tunel   o túnel da Cloudflare: um link https público (com QR code) para abrir de qualquer lugar.
  *
  * É um servidor de um processo só, com poll(), sem bibliotecas além da libc. Só escuta em
  * 127.0.0.1 e tudo o que mexe no aparelho exige a chave (token) mostrada ao iniciar.
  */
 #define _GNU_SOURCE
 #include "comum.h"
+#include "qr.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -139,6 +141,15 @@ static char hosts_extra[8][128];
 static int n_hosts_extra;
 static volatile sig_atomic_t parar;
 
+/* túnel da Cloudflare (cloudflared): um endereço https público que leva a esta ponte.
+ * O link do túnel leva uma chave própria, que deixa de valer quando o túnel é desligado. */
+static struct {
+    pid_t pid; int fd, mostrar_qr;
+    char buf[8192]; size_t nbuf;
+    char host[160], url[200], chave[80], erro[400];
+    time_t desde;
+} tunel = { 0, -1, 0, "", 0, "", "", "", "", 0 };
+
 static struct { pid_t pid, wm; int display, larg, alt; char sock[256]; int porta_tcp; } tela;
 
 static void registrar(const char *fmt, ...) {
@@ -239,6 +250,10 @@ static int autenticado(const Req *r) {
     char v[512];
     if (cabecalho(r, "X-TNUX-Token", v, sizeof v) && igual_seguro(v, TOKEN)) return 1;
     if (parametro(r, "token", v, sizeof v) && igual_seguro(v, TOKEN)) return 2;
+    if (tunel.chave[0]) {                       /* a chave do link do túnel, enquanto ele estiver ligado */
+        if (cabecalho(r, "X-TNUX-Token", v, sizeof v) && igual_seguro(v, tunel.chave)) return 3;
+        if (parametro(r, "token", v, sizeof v) && igual_seguro(v, tunel.chave)) return 4;
+    }
     return 0;
 }
 /* o pedido veio para um endereço nosso? (protege contra páginas de outros sites apontando para cá) */
@@ -250,6 +265,7 @@ static int host_ok(const Req *r) {
     if (dp) { if (*dp == ']') dp++; *dp = 0; }
     if (!strcmp(h, "127.0.0.1") || !strcasecmp(h, "localhost") || !strcmp(h, "[::1]")) return 1;
     for (int i = 0; i < n_hosts_extra; i++) if (!strcasecmp(h, hosts_extra[i])) return 1;
+    if (tunel.host[0] && !strcasecmp(h, tunel.host)) return 1;
     return 0;
 }
 static int origem_ok(const Req *r) {
@@ -1000,6 +1016,168 @@ static void api_trabalhos(Con *c, const Req *r, const char *op) {
     } else resp_erro(c, 404, "operação desconhecida");
 }
 
+/* ------------------------------------------------------------------ túnel da Cloudflare */
+
+/* acha o cloudflared: no PATH, ou nas pastas em que o "tnux instalar cloudflared" o põe */
+static const char *achar_cloudflared(void) {
+    static char cam[4200];
+    if (tem_comando("cloudflared")) return "cloudflared";
+    const char *casa = getenv("HOME");
+    snprintf(cam, sizeof cam, "%s/.local/bin/cloudflared", casa ? casa : "");
+    if (access(cam, X_OK) == 0) return cam;
+    snprintf(cam, sizeof cam, "%s/bin/cloudflared", PASTA);
+    if (access(cam, X_OK) == 0) return cam;
+    return NULL;
+}
+static int tunel_ativo(void) { return tunel.pid > 0; }
+
+static void gerar_chave(char *dst, size_t n) {
+    unsigned char r[24];
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0 || read(fd, r, sizeof r) != (ssize_t)sizeof r) { fprintf(stderr, "tnuxd: sem /dev/urandom\n"); exit(1); }
+    close(fd);
+    for (size_t i = 0; i < sizeof r && i * 2 + 2 < n; i++) snprintf(dst + i * 2, 3, "%02x", r[i]);
+}
+
+static void tunel_parar(void) {
+    if (tunel.pid > 0) { kill(tunel.pid, SIGTERM); tunel.pid = 0; }
+    if (tunel.fd >= 0) { close(tunel.fd); tunel.fd = -1; }
+    tunel.host[0] = tunel.url[0] = tunel.chave[0] = 0;
+    tunel.nbuf = 0;
+}
+
+/* liga o cloudflared. Devolve NULL se começou a ligar, ou o motivo de não ter ligado. */
+static const char *tunel_iniciar(void) {
+    if (tunel_ativo()) return NULL;
+    const char *prog = achar_cloudflared();
+    if (!prog) return "o cloudflared não está instalado neste aparelho. No terminal: tnux instalar cloudflared";
+    int cano[2];
+    if (pipe(cano) != 0) return "não foi possível criar o cano para o cloudflared";
+    char url_local[64];
+    snprintf(url_local, sizeof url_local, "http://127.0.0.1:%d", porta);
+    pid_t p = fork();
+    if (p < 0) { close(cano[0]); close(cano[1]); return "não foi possível iniciar o cloudflared"; }
+    if (p == 0) {
+        setsid();
+        int nulo = open("/dev/null", O_RDONLY);
+        if (nulo >= 0) dup2(nulo, 0);
+        dup2(cano[1], 1); dup2(cano[1], 2);
+        for (int fd = 3; fd < 1024; fd++) close(fd);
+        signal(SIGPIPE, SIG_DFL); signal(SIGINT, SIG_DFL); signal(SIGTERM, SIG_DFL); signal(SIGHUP, SIG_DFL);
+        execlp(prog, "cloudflared", "tunnel", "--no-autoupdate", "--url", url_local, (char *)NULL);
+        fprintf(stderr, "não foi possível executar o cloudflared\n");
+        _exit(127);
+    }
+    close(cano[1]);
+    nao_bloquear(cano[0]);
+    fcntl(cano[0], F_SETFD, FD_CLOEXEC);
+    tunel.pid = p; tunel.fd = cano[0]; tunel.nbuf = 0;
+    tunel.host[0] = tunel.url[0] = tunel.erro[0] = 0;
+    tunel.desde = time(NULL);
+    gerar_chave(tunel.chave, sizeof tunel.chave);
+    return NULL;
+}
+
+static void tunel_mostrar(void) {
+    char link[400];
+    snprintf(link, sizeof link, "%s/#token=%s", tunel.url, tunel.chave);
+    printf("\n  \x1b[1;32mLink pela internet (Cloudflare):\x1b[0m\n\n    \x1b[1;36m%s\x1b[0m\n\n", link);
+    Qr q;
+    if (!qr_gerar(&q, link)) { qr_terminal(&q, stdout); printf("\n"); }
+    printf("  \x1b[33mQuem tiver este link controla este aparelho como você.\x1b[0m Ele deixa de valer quando o túnel desliga.\n\n");
+    fflush(stdout);
+}
+
+/* lê a saída do cloudflared: é ali que aparece o endereço trycloudflare.com */
+static void tunel_ler(void) {
+    char tmp[4096];
+    ssize_t r = read(tunel.fd, tmp, sizeof tmp);
+    if (r <= 0) {
+        if (r < 0 && (errno == EAGAIN || errno == EINTR)) return;
+        close(tunel.fd); tunel.fd = -1;
+        return;
+    }
+    /* guarda o fim da saída (para mostrar o erro, se o cloudflared morrer) e procura o endereço */
+    if (tunel.nbuf + (size_t)r >= sizeof tunel.buf) {
+        size_t manter = sizeof tunel.buf / 2;
+        if (tunel.nbuf > manter) { memmove(tunel.buf, tunel.buf + tunel.nbuf - manter, manter); tunel.nbuf = manter; }
+        if ((size_t)r >= sizeof tunel.buf - tunel.nbuf) r = (ssize_t)(sizeof tunel.buf - tunel.nbuf - 1);
+    }
+    memcpy(tunel.buf + tunel.nbuf, tmp, (size_t)r);
+    tunel.nbuf += (size_t)r;
+    tunel.buf[tunel.nbuf] = 0;
+    char log[4300];
+    snprintf(log, sizeof log, "%s/tunel.log", PASTA);
+    int lf = open(log, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (lf >= 0) { if (write(lf, tmp, (size_t)r) < 0) {} close(lf); }
+    if (tunel.url[0]) return;
+    for (char *p = tunel.buf; (p = strstr(p, "https://")); p += 8) {
+        char *h = p + 8, *f = h;
+        while ((*f >= 'a' && *f <= 'z') || (*f >= '0' && *f <= '9') || *f == '-') f++;
+        if (f == h || strncmp(f, ".trycloudflare.com", 18)) continue;
+        if (!strncmp(h, "api.", 4)) continue;
+        size_t lh = (size_t)(f - h) + 18;
+        if (lh >= sizeof tunel.host) continue;
+        memcpy(tunel.host, h, lh); tunel.host[lh] = 0;
+        snprintf(tunel.url, sizeof tunel.url, "https://%s", tunel.host);
+        if (tunel.mostrar_qr) tunel_mostrar();
+        return;
+    }
+}
+
+/* o cloudflared terminou: guarda o motivo (as últimas linhas que ele escreveu) */
+static void tunel_morreu(void) {
+    if (tunel.fd >= 0) { while (1) { char tmp[4096]; ssize_t r = read(tunel.fd, tmp, sizeof tmp); if (r <= 0) break; } }
+    const char *fim = tunel.buf + tunel.nbuf;
+    int linhas = 0;
+    const char *ini = fim;
+    while (ini > tunel.buf && linhas < 3) { ini--; if (*ini == '\n' && ini + 1 < fim) linhas++; }
+    snprintf(tunel.erro, sizeof tunel.erro, "o cloudflared parou%s%s", tunel.nbuf ? ": " : "", tunel.nbuf ? ini : "");
+    size_t l = strlen(tunel.erro);
+    while (l && (tunel.erro[l - 1] == '\n' || tunel.erro[l - 1] == ' ')) tunel.erro[--l] = 0;
+    tunel.pid = 0;
+    if (tunel.fd >= 0) { close(tunel.fd); tunel.fd = -1; }
+    tunel.host[0] = tunel.url[0] = tunel.chave[0] = 0;
+    if (tunel.mostrar_qr) { fprintf(stderr, "\n  \x1b[31m%s\x1b[0m\n", tunel.erro); }
+}
+
+static void api_tunel(Con *c, const Req *r, const char *op) {
+    if (!strcmp(op, "iniciar")) {
+        if (strcmp(r->metodo, "POST")) { resp_erro(c, 405, "use POST"); return; }
+        const char *erro = tunel_iniciar();
+        if (erro) { resp_erro(c, 409, erro); return; }
+    } else if (!strcmp(op, "parar")) {
+        if (strcmp(r->metodo, "POST")) { resp_erro(c, 405, "use POST"); return; }
+        tunel_parar();
+        tunel.erro[0] = 0;
+    } else if (!strcmp(op, "qr.svg")) {
+        char txt[600];
+        if (!parametro(r, "txt", txt, sizeof txt) || !*txt) {
+            if (!tunel.url[0]) { resp_erro(c, 404, "o túnel ainda não tem endereço"); return; }
+            snprintf(txt, sizeof txt, "%s/#token=%s", tunel.url, tunel.chave);
+        }
+        Qr q;
+        if (qr_gerar(&q, txt)) { resp_erro(c, 400, "texto grande demais para um QR code"); return; }
+        size_t n = 0;
+        char *svg = qr_svg(&q, &n);
+        if (!svg) { resp_erro(c, 400, "sem memória"); return; }
+        resp(c, 200, "image/svg+xml", svg, n);
+        free(svg);
+        return;
+    } else if (strcmp(op, "estado")) { resp_erro(c, 404, "operação desconhecida"); return; }
+    B b = { 0 };
+    b_printf(&b, "{\"ativo\":%s,\"disponivel\":%s,\"pronto\":%s,\"desde\":%ld,\"url\":", tunel_ativo() ? "true" : "false",
+             achar_cloudflared() ? "true" : "false", tunel.url[0] ? "true" : "false", (long)tunel.desde);
+    b_json(&b, tunel.url);
+    b_puts(&b, ",\"link\":");
+    if (tunel.url[0]) { char link[400]; snprintf(link, sizeof link, "%s/#token=%s", tunel.url, tunel.chave); b_json(&b, link); }
+    else b_puts(&b, "\"\"");
+    b_puts(&b, ",\"erro\":"); b_json(&b, tunel.erro);
+    b_puts(&b, "}");
+    resp_json(c, 200, b.d);
+    b_livra(&b);
+}
+
 /* ------------------------------------------------------------------ informações */
 
 static void api_info(Con *c) {
@@ -1025,6 +1203,11 @@ static void api_info(Con *c) {
              eh_termux() ? "true" : "false", geteuid() == 0 ? "true" : "false", access(tnux, X_OK) == 0 ? "true" : "false");
     b_puts(&b, ",\"chave_apps\":"); b_json(&b, CHAVE_APPS);
     b_printf(&b, ",\"porta\":%d", porta);
+    {
+        char py[4200];
+        b_puts(&b, ",\"lnux\":"); b_json(&b, achar_lnux(py, sizeof py) ? py : "");
+    }
+    b_printf(&b, ",\"tunel_disponivel\":%s,\"tunel_ativo\":%s", achar_cloudflared() ? "true" : "false", tunel_ativo() ? "true" : "false");
     b_printf(&b, ",\"tela_disponivel\":%s,\"tela_ativa\":%s,\"tela_propria\":%s}", achar_xvnc() ? "true" : "false", tela_ativa() ? "true" : "false",
              ((getenv("DISPLAY") && *getenv("DISPLAY")) || (getenv("WAYLAND_DISPLAY") && *getenv("WAYLAND_DISPLAY"))) ? "true" : "false");
     resp_json(c, 200, b.d);
@@ -1094,6 +1277,12 @@ static int pty_abrir(Con *c, int cols, int rows, const char *cmd) {
         setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
         setenv("TNUX_PONTE", "1", 1);
+        {   /* o "tnux" fica no PATH dos terminais da área de trabalho */
+            char path[8400];
+            const char *velho = getenv("PATH");
+            snprintf(path, sizeof path, "%s/build:%s", RAIZ, velho ? velho : "/usr/bin:/bin");
+            setenv("PATH", path, 1);
+        }
         if (tela_ativa()) { char d[16]; snprintf(d, sizeof d, ":%d", tela.display); if (!getenv("DISPLAY")) setenv("DISPLAY", d, 1); }
         const char *casa = getenv("HOME");
         if (casa && chdir(casa) != 0) {}
@@ -1209,6 +1398,7 @@ static void atender(Con *c, const Req *r) {
         else if (!strcmp(cam, "/api/lancar")) api_lancar(c, r);
         else if (!strncmp(cam, "/api/tela/", 10)) api_tela(c, r, cam + 10);
         else if (!strncmp(cam, "/api/trabalhos/", 15)) api_trabalhos(c, r, cam + 15);
+        else if (!strncmp(cam, "/api/tunel/", 11)) api_tunel(c, r, cam + 11);
         else resp_erro(c, 404, "não existe");
         return;
     }
@@ -1346,18 +1536,20 @@ static void uso(void) {
            "  --abrir              abre o navegador ao iniciar\n"
            "  --token CHAVE        usa esta chave em vez de sortear uma\n"
            "  --permitir-host H    aceita pedidos para este nome (para usar atrás de um túnel https)\n"
+           "  --tunel              liga um túnel da Cloudflare (cloudflared): um link https para abrir de qualquer lugar\n"
            "  --rede               aceita conexões de outros aparelhos da rede: é como um computador abre o TNUX do celular\n"
            "                       e empresta o processador dele (cuidado: quem tiver a chave controla este aparelho)\n"
            "  -v                   mostra os pedidos\n");
 }
 
 int main(int argc, char **argv) {
-    int abrir = 0;
+    int abrir = 0, quer_tunel = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--porta") && i + 1 < argc) porta = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--abrir")) abrir = 1;
         else if (!strcmp(argv[i], "--nao-abrir")) abrir = 0;
         else if (!strcmp(argv[i], "--rede")) rede = 1;
+        else if (!strcmp(argv[i], "--tunel") || !strcmp(argv[i], "--cloudflare")) quer_tunel = 1;
         else if (!strcmp(argv[i], "-v")) verboso = 1;
         else if (!strcmp(argv[i], "--token") && i + 1 < argc) snprintf(TOKEN, sizeof TOKEN, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--permitir-host") && i + 1 < argc) { if (n_hosts_extra < 8) snprintf(hosts_extra[n_hosts_extra++], 128, "%s", argv[++i]); else i++; }
@@ -1405,12 +1597,20 @@ int main(int argc, char **argv) {
     fflush(stdout);
     ponte_json(1);
     if (abrir) abrir_navegador(url);
+    tunel.mostrar_qr = 1;           /* o link do túnel aparece também aqui no terminal, com QR code */
+    if (quer_tunel) {
+        const char *erro = tunel_iniciar();
+        if (erro) printf("  \x1b[31mTúnel: %s\x1b[0m\n\n", erro);
+        else printf("  Ligando o túnel da Cloudflare (alguns segundos)...\n");
+        fflush(stdout);
+    }
 
     while (!parar) {
         struct pollfd pf[1 + MAX_CON * 2];
         Con *dono[1 + MAX_CON * 2];
         int papel[1 + MAX_CON * 2], n = 0;
         pf[n].fd = srv; pf[n].events = POLLIN; dono[n] = NULL; papel[n++] = 0;
+        if (tunel.fd >= 0) { pf[n].fd = tunel.fd; pf[n].events = POLLIN; dono[n] = NULL; papel[n++] = 3; }
         for (int i = 0; i < MAX_CON; i++) {
             Con *c = &cons[i];
             if (c->fd <= 0) continue;
@@ -1431,6 +1631,7 @@ int main(int argc, char **argv) {
         pid_t morto;
         while ((morto = waitpid(-1, &st, WNOHANG)) > 0) {
             if (morto == tela.pid) { tela.pid = 0; if (tela.wm > 0) kill(tela.wm, SIGTERM); tela.wm = 0; }
+            else if (tunel.pid > 0 && morto == tunel.pid) tunel_morreu();
             else if (morto == tela.wm) tela.wm = 0;
             for (int i = 0; i < MAX_CON; i++) if (cons[i].fd > 0 && cons[i].pid == morto) cons[i].pid = 0;
         }
@@ -1442,6 +1643,7 @@ int main(int argc, char **argv) {
         for (int k = 0; k < n; k++) {
             if (!pf[k].revents) continue;
             Con *c = dono[k];
+            if (papel[k] == 3) { if (tunel.fd >= 0) tunel_ler(); continue; }
             if (papel[k] == 0) {
                 for (;;) {
                     int fd = accept(srv, NULL, NULL);
@@ -1495,6 +1697,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("\nDesligando a ponte...\n");
+    tunel_parar();
     ponte_json(0);
     for (int i = 0; i < MAX_CON; i++) con_fechar(&cons[i]);
     tela_parar();

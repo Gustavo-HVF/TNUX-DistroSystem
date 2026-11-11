@@ -27,12 +27,12 @@ def porta_livre():
 
 
 class Ponte:
-    def __init__(self, casa):
+    def __init__(self, casa, extra=None, args=()):
         self.porta = porta_livre()
-        amb = dict(os.environ, HOME=casa, TNUX_RAIZ=RAIZ)
+        amb = dict(os.environ, HOME=casa, TNUX_RAIZ=RAIZ, **(extra or {}))
         amb.pop("DISPLAY", None)
         amb.pop("WAYLAND_DISPLAY", None)
-        self.proc = subprocess.Popen([os.path.join(RAIZ, "build", "tnuxd"), "--porta", str(self.porta), "--token", TOKEN],
+        self.proc = subprocess.Popen([os.path.join(RAIZ, "build", "tnuxd"), "--porta", str(self.porta), "--token", TOKEN, *args],
                                      env=amb, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for _ in range(100):
             try:
@@ -71,10 +71,10 @@ class Ponte:
 class WS:
     """Cliente WebSocket mínimo (o bastante para conversar com o tnuxd)."""
 
-    def __init__(self, porta, cam, origem=None):
+    def __init__(self, porta, cam, origem=None, host=None):
         self.s = socket.create_connection(("127.0.0.1", porta), timeout=15)
         chave = base64.b64encode(os.urandom(16)).decode()
-        cab = f"GET {cam} HTTP/1.1\r\nHost: 127.0.0.1:{porta}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {chave}\r\nSec-WebSocket-Version: 13\r\n"
+        cab = f"GET {cam} HTTP/1.1\r\nHost: {host or f'127.0.0.1:{porta}'}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {chave}\r\nSec-WebSocket-Version: 13\r\n"
         if origem:
             cab += f"Origin: {origem}\r\n"
         self.s.sendall((cab + "\r\n").encode())
@@ -142,6 +142,91 @@ class WS:
             self.s.close()
         except OSError:
             pass
+
+
+CLOUDFLARED_FALSO = """#!/bin/sh
+# imita a saída do cloudflared de verdade (túnel rápido)
+echo "$@" > "$HOME/cloudflared.args"
+echo "2026-11-11T14:12:54Z INF Requesting new quick Tunnel on trycloudflare.com..." >&2
+sleep 0.3
+echo "2026-11-11T14:12:55Z INF +--------------------------------------------------------------------------------------------+" >&2
+echo "2026-11-11T14:12:55Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |" >&2
+echo "2026-11-11T14:12:55Z INF |  https://palavras-de-teste-aqui.trycloudflare.com                                          |" >&2
+echo "2026-11-11T14:12:55Z INF +--------------------------------------------------------------------------------------------+" >&2
+exec sleep 600
+"""
+CLOUDFLARED_QUEBRADO = """#!/bin/sh
+echo "2026-11-11T14:12:54Z INF Requesting new quick Tunnel on trycloudflare.com..." >&2
+echo 'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": dial tcp: lookup api.trycloudflare.com: no such host' >&2
+exit 1
+"""
+
+
+def testar_tunel():
+    casa = tempfile.mkdtemp(prefix="tnux-tunel-")
+    binario = os.path.join(casa, "bin")
+    os.makedirs(binario)
+    cf = os.path.join(binario, "cloudflared")
+    sem = Ponte(casa, {"PATH": "/usr/bin:/bin"})
+    try:
+        st, j = sem.json("GET", "/api/tunel/estado")
+        confere("túnel: sem cloudflared, avisa que não está disponível", st == 200 and j["disponivel"] is False and j["ativo"] is False, f"{st} {j}")
+        st, j = sem.json("POST", "/api/tunel/iniciar")
+        confere("túnel: sem cloudflared, explica como instalar", st == 409 and "tnux instalar cloudflared" in j["erro"], f"{st} {j}")
+    finally:
+        sem.parar()
+    open(cf, "w").write(CLOUDFLARED_FALSO)
+    os.chmod(cf, 0o755)
+    p = Ponte(casa, {"PATH": binario + ":/usr/bin:/bin"})
+    try:
+        st, j = p.json("GET", "/api/info")
+        confere("info diz se há cloudflared", st == 200 and j["tunel_disponivel"] is True and j["tunel_ativo"] is False, f"{st} {j}")
+        st, j = p.json("GET", "/api/tunel/iniciar")
+        confere("ligar o túnel exige POST", st == 405, f"{st}")
+        st, j = p.json("POST", "/api/tunel/iniciar", token=False)
+        confere("ligar o túnel exige a chave", st == 401, f"{st}")
+        st, j = p.json("POST", "/api/tunel/iniciar")
+        confere("liga o túnel", st == 200 and j["ativo"] is True, f"{st} {j}")
+        for _ in range(50):
+            st, j = p.json("GET", "/api/tunel/estado")
+            if j.get("pronto"):
+                break
+            time.sleep(0.1)
+        host = "palavras-de-teste-aqui.trycloudflare.com"
+        confere("acha o endereço na saída do cloudflared", j.get("url") == "https://" + host and j["link"].startswith(f"https://{host}/#token="), f"{j}")
+        confere("o cloudflared aponta para a ponte", open(os.path.join(casa, "cloudflared.args")).read().split() == ["tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{p.porta}"], "")
+        chave_tunel = j["link"].split("#token=")[1]
+        confere("o link do túnel tem uma chave própria", len(chave_tunel) == 48 and chave_tunel != TOKEN, chave_tunel)
+        # um pedido chegando pelo túnel (o cloudflared repassa com Host = o endereço público)
+        pelo = {"Host": host, "X-TNUX-Token": chave_tunel, "Origin": "https://" + host}
+        st, j = p.json("GET", "/api/info", cab=pelo, token=False)
+        confere("pelo túnel, a chave do link funciona", st == 200 and j["modo"] == "ponte", f"{st} {j}")
+        st, j = p.json("GET", "/api/info", cab={"Host": "outro.trycloudflare.com", "X-TNUX-Token": chave_tunel}, token=False)
+        confere("só o endereço deste túnel é aceito", st == 403, f"{st}")
+        w = WS(p.porta, f"/ws/pty?token={chave_tunel}", origem="https://" + host, host=host)
+        confere("pelo túnel, o terminal abre (WebSocket)", w.status == 101, f"{w.status}")
+        w.fechar()
+        st, d, r = p.pedir("GET", "/api/tunel/qr.svg")
+        confere("QR code do link em SVG", st == 200 and r.getheader("Content-Type") == "image/svg+xml" and d.startswith(b"<svg") and d.count(b"M") > 100, f"{st} {d[:80]!r}")
+        st, j = p.json("POST", "/api/tunel/parar")
+        confere("desliga o túnel", st == 200 and j["ativo"] is False and j["url"] == "", f"{st} {j}")
+        st, j = p.json("GET", "/api/info", cab=pelo, token=False)
+        confere("desligado o túnel, o link para de valer", st in (401, 403), f"{st}")
+        time.sleep(0.3)
+        confere("o cloudflared foi encerrado", subprocess.run(["pgrep", "-f", binario + "/cloudflared"], capture_output=True).returncode != 0 or
+                subprocess.run(["sh", "-c", f"ps -o stat= -p $(pgrep -f '{binario}/cloudflared' | head -1)"], capture_output=True, text=True).stdout.strip().startswith("Z"), "")
+        # o cloudflared falha (sem internet, por exemplo): o motivo chega à área de trabalho
+        open(cf, "w").write(CLOUDFLARED_QUEBRADO)
+        st, j = p.json("POST", "/api/tunel/iniciar")
+        for _ in range(50):
+            st, j = p.json("GET", "/api/tunel/estado")
+            if not j["ativo"]:
+                break
+            time.sleep(0.1)
+        confere("quando o cloudflared falha, o motivo aparece", j["ativo"] is False and "no such host" in j["erro"] and j["link"] == "", f"{j}")
+    finally:
+        p.parar()
+        shutil.rmtree(casa, ignore_errors=True)
 
 
 def main():
@@ -325,6 +410,7 @@ def main():
     finally:
         p.parar()
         shutil.rmtree(casa, ignore_errors=True)
+    testar_tunel()
     print(f"{feitos - falhas}/{feitos} testes da ponte passaram")
     sys.exit(1 if falhas else 0)
 
