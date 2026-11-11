@@ -8,7 +8,8 @@
  *   - /api/apps    programas instalados (os .desktop do sistema e os apps web do TNUX);
  *   - /c/CHAVE/... os apps web instalados em ~/.tnux/apps, isolados da área de trabalho;
  *   - /api/lancar  abre um programa gráfico do aparelho;
- *   - /ws/tela     a tela (VNC) em que esses programas aparecem, vista de dentro do TNUX.
+ *   - /ws/tela     a tela (VNC) em que esses programas aparecem, vista de dentro do TNUX;
+ *   - /api/trabalhos  a fila pela qual um computador faz o processamento pesado para o aparelho.
  *
  * É um servidor de um processo só, com poll(), sem bibliotecas além da libc. Só escuta em
  * 127.0.0.1 e tudo o que mexe no aparelho exige a chave (token) mostrada ao iniciar.
@@ -27,6 +28,7 @@
 #include <termios.h>
 #include <time.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/ioctl.h>
@@ -832,6 +834,165 @@ static void api_lancar(Con *c, const Req *r) {
     b_livra(&b);
 }
 
+/* ------------------------------------------------------------------ fila de trabalhos: o computador ajuda o aparelho
+ *
+ * Um celular tem pouco processador e pouca memória. Quando a área de trabalho do TNUX está aberta no
+ * navegador de um computador, esse computador pode fazer o serviço pesado: o aparelho põe um trabalho
+ * na fila (converter imagens, compactar, rodar um comando sobre arquivos...), o navegador do computador
+ * pega o trabalho, lê os arquivos pela ponte, processa com o processador DELE e grava o resultado de
+ * volta no aparelho. Aqui fica só a fila; quem processa é o navegador (web/js/processador.js).
+ */
+
+enum { T_VAZIO, T_FILA, T_RODANDO, T_FEITO, T_FALHOU };
+typedef struct { int id, estado, p, tentativas; char tipo[32], quem[64]; char *json, *msg; time_t criado, tocado; } Trab;
+#define MAX_MSG (512 * 1024)       /* o resultado de um trabalho (texto) cabe aqui */
+typedef struct { char nome[64], caps[256]; int nucleos; time_t visto; } Ajudante;
+#define MAX_TRAB 64
+#define MAX_AJUD 16
+static Trab trabs[MAX_TRAB];
+static Ajudante ajudantes[MAX_AJUD];
+static int prox_trab = 1;
+
+static void trab_msg(Trab *t, const char *d, size_t n) {
+    if (n > MAX_MSG) n = MAX_MSG;
+    free(t->msg);
+    t->msg = malloc(n + 1);
+    memcpy(t->msg, d, n);
+    t->msg[n] = 0;
+}
+static void trab_limpar(Trab *t) { free(t->json); free(t->msg); memset(t, 0, sizeof *t); }
+static const char *nome_estado(int e) { return e == T_FILA ? "fila" : e == T_RODANDO ? "rodando" : e == T_FEITO ? "feito" : e == T_FALHOU ? "falhou" : "vazio"; }
+static Trab *trab_achar(int id) { for (int i = 0; i < MAX_TRAB; i++) if (trabs[i].estado != T_VAZIO && trabs[i].id == id) return &trabs[i]; return NULL; }
+
+/* trabalhos cujo computador sumiu voltam para a fila (uma vez); depois disso, falham */
+static void trabs_vigiar(void) {
+    time_t agora = time(NULL);
+    for (int i = 0; i < MAX_TRAB; i++) {
+        Trab *t = &trabs[i];
+        if (t->estado == T_RODANDO && agora - t->tocado > 90) {
+            const char *m = t->tentativas < 2 ? "o computador parou de responder; esperando outro" : "o computador que pegou o trabalho parou de responder";
+            t->estado = t->tentativas < 2 ? T_FILA : T_FALHOU;
+            if (t->estado == T_FILA) t->p = 0;
+            trab_msg(t, m, strlen(m));
+            t->tocado = agora;
+        }
+        /* resultados antigos saem da lista depois de uma hora */
+        if ((t->estado == T_FEITO || t->estado == T_FALHOU) && agora - t->tocado > 3600) trab_limpar(t);
+    }
+}
+static int ajudantes_ativos(void) {
+    int n = 0;
+    time_t agora = time(NULL);
+    for (int i = 0; i < MAX_AJUD; i++) if (ajudantes[i].nome[0] && agora - ajudantes[i].visto < 12) n++;
+    return n;
+}
+static void trab_json(B *b, const Trab *t) {
+    b_printf(b, "{\"id\":%d,\"tipo\":", t->id); b_json(b, t->tipo);
+    b_printf(b, ",\"estado\":\"%s\",\"p\":%d,\"msg\":", nome_estado(t->estado), t->p); b_json(b, t->msg ? t->msg : "");
+    b_puts(b, ",\"quem\":"); b_json(b, t->quem);
+    b_printf(b, ",\"idade\":%ld,\"ajudantes\":%d}", (long)(time(NULL) - t->criado), ajudantes_ativos());
+}
+
+static void api_trabalhos(Con *c, const Req *r, const char *op) {
+    char v[512];
+    trabs_vigiar();
+    if (!strcmp(op, "criar")) {
+        if (strcmp(r->metodo, "POST")) { resp_erro(c, 405, "use POST"); return; }
+        if (r->ncorpo < 2 || r->ncorpo > 256 * 1024 || r->corpo[0] != '{') { resp_erro(c, 400, "o trabalho precisa ser um objeto JSON (até 256 KiB)"); return; }
+        Trab *t = NULL;
+        for (int i = 0; i < MAX_TRAB && !t; i++) if (trabs[i].estado == T_VAZIO) t = &trabs[i];
+        if (!t) {                                   /* fila cheia: reaproveita o resultado mais antigo */
+            for (int i = 0; i < MAX_TRAB; i++)
+                if ((trabs[i].estado == T_FEITO || trabs[i].estado == T_FALHOU) && (!t || trabs[i].tocado < t->tocado)) t = &trabs[i];
+            if (!t) { resp_erro(c, 409, "a fila de trabalhos está cheia"); return; }
+        }
+        trab_limpar(t);
+        t->json = malloc(r->ncorpo + 1);
+        memcpy(t->json, r->corpo, r->ncorpo); t->json[r->ncorpo] = 0;
+        const char *tp = strstr(t->json, "\"tipo\"");
+        if (tp) { tp = strchr(tp + 6, '"'); if (tp) { tp++; size_t l = strcspn(tp, "\""); if (l < sizeof t->tipo) { memcpy(t->tipo, tp, l); t->tipo[l] = 0; } } }
+        if (!t->tipo[0]) { trab_limpar(t); resp_erro(c, 400, "o trabalho precisa de um campo \"tipo\""); return; }
+        t->id = prox_trab++; t->estado = T_FILA; t->criado = t->tocado = time(NULL);
+        char j[64];
+        snprintf(j, sizeof j, "{\"id\":%d,\"ajudantes\":%d}", t->id, ajudantes_ativos());
+        resp_json(c, 200, j);
+    } else if (!strcmp(op, "pegar")) {
+        char quem[64], caps[256], nuc[16];
+        parametro(r, "quem", quem, sizeof quem); parametro(r, "caps", caps, sizeof caps); parametro(r, "nucleos", nuc, sizeof nuc);
+        if (!quem[0]) { resp_erro(c, 400, "informe quem="); return; }
+        Ajudante *a = NULL;
+        time_t agora = time(NULL);
+        for (int i = 0; i < MAX_AJUD && !a; i++) if (!strcmp(ajudantes[i].nome, quem)) a = &ajudantes[i];
+        for (int i = 0; i < MAX_AJUD && !a; i++) if (!ajudantes[i].nome[0] || agora - ajudantes[i].visto > 60) a = &ajudantes[i];
+        if (a) { snprintf(a->nome, sizeof a->nome, "%s", quem); snprintf(a->caps, sizeof a->caps, "%s", caps); a->nucleos = atoi(nuc); a->visto = agora; }
+        Trab *t = NULL;
+        for (int i = 0; i < MAX_TRAB; i++) {
+            if (trabs[i].estado != T_FILA) continue;
+            /* só entrega o que este computador sabe fazer */
+            const char *p = caps; size_t lt = strlen(trabs[i].tipo); int sabe = 0;
+            while (*p && !sabe) { size_t l = strcspn(p, ","); if (l == lt && !strncmp(p, trabs[i].tipo, l)) sabe = 1; p += l; if (*p == ',') p++; }
+            if (sabe && (!t || trabs[i].id < t->id)) t = &trabs[i];
+        }
+        if (!t) { resp_json(c, 200, "{\"id\":0}"); return; }
+        t->estado = T_RODANDO; t->tentativas++; t->tocado = agora; t->p = 0; trab_msg(t, "", 0);
+        snprintf(t->quem, sizeof t->quem, "%s", quem);
+        B b = { 0 };
+        b_printf(&b, "{\"id\":%d,\"trabalho\":%s}", t->id, t->json);
+        resp_json(c, 200, b.d);
+        b_livra(&b);
+    } else if (!strcmp(op, "andamento") || !strcmp(op, "fim") || !strcmp(op, "cancelar") || !strcmp(op, "estado")) {
+        parametro(r, "id", v, sizeof v);
+        Trab *t = trab_achar(atoi(v));
+        if (!t) { resp_erro(c, 404, "trabalho não encontrado"); return; }
+        if (strcmp(op, "estado") && strcmp(r->metodo, "POST")) { resp_erro(c, 405, "use POST"); return; }
+        if (!strcmp(op, "andamento")) {
+            if (t->estado == T_RODANDO) {
+                parametro(r, "p", v, sizeof v);
+                t->p = atoi(v) < 0 ? 0 : atoi(v) > 100 ? 100 : atoi(v);
+                t->tocado = time(NULL);
+                if (r->ncorpo) trab_msg(t, r->corpo, r->ncorpo);
+            }
+        } else if (!strcmp(op, "fim")) {
+            if (t->estado == T_RODANDO) {
+                parametro(r, "ok", v, sizeof v);
+                t->estado = atoi(v) ? T_FEITO : T_FALHOU;
+                t->p = atoi(v) ? 100 : t->p;
+                t->tocado = time(NULL);
+                trab_msg(t, r->corpo, r->ncorpo);
+            }
+        } else if (!strcmp(op, "cancelar")) {
+            if (t->estado == T_FILA || t->estado == T_RODANDO) { t->estado = T_FALHOU; trab_msg(t, "cancelado", 9); t->tocado = time(NULL); }
+        }
+        B b = { 0 };
+        trab_json(&b, t);
+        resp_json(c, 200, b.d);
+        b_livra(&b);
+    } else if (!strcmp(op, "lista")) {
+        B b = { 0 };
+        time_t agora = time(NULL);
+        b_puts(&b, "{\"ajudantes\":[");
+        int n = 0;
+        for (int i = 0; i < MAX_AJUD; i++) {
+            if (!ajudantes[i].nome[0] || agora - ajudantes[i].visto > 12) continue;
+            if (n++) b_puts(&b, ",");
+            b_puts(&b, "{\"nome\":"); b_json(&b, ajudantes[i].nome);
+            b_puts(&b, ",\"caps\":"); b_json(&b, ajudantes[i].caps);
+            b_printf(&b, ",\"nucleos\":%d}", ajudantes[i].nucleos);
+        }
+        b_puts(&b, "],\"trabalhos\":[");
+        n = 0;
+        for (int id = prox_trab - 1; id > 0 && id > prox_trab - 1 - MAX_TRAB; id--) {
+            Trab *t = trab_achar(id);
+            if (!t) continue;
+            if (n++) b_puts(&b, ",");
+            trab_json(&b, t);
+        }
+        b_puts(&b, "]}");
+        resp_json(c, 200, b.d);
+        b_livra(&b);
+    } else resp_erro(c, 404, "operação desconhecida");
+}
+
 /* ------------------------------------------------------------------ informações */
 
 static void api_info(Con *c) {
@@ -1040,6 +1201,7 @@ static void atender(Con *c, const Req *r) {
         else if (!strcmp(cam, "/api/icone")) api_icone(c, r);
         else if (!strcmp(cam, "/api/lancar")) api_lancar(c, r);
         else if (!strncmp(cam, "/api/tela/", 10)) api_tela(c, r, cam + 10);
+        else if (!strncmp(cam, "/api/trabalhos/", 15)) api_trabalhos(c, r, cam + 15);
         else resp_erro(c, 404, "não existe");
         return;
     }
@@ -1129,6 +1291,40 @@ static void chave_apps_gerar(void) {
     for (size_t i = 0; i < sizeof r; i++) snprintf(CHAVE_APPS + i * 2, 3, "%02x", r[i]);
 }
 
+/* ~/.tnux/ponte.json: é por aqui que o "tnux pc ..." do terminal acha a ponte ligada */
+static void ponte_json(int criar) {
+    char cam[4300];
+    snprintf(cam, sizeof cam, "%s/ponte.json", PASTA);
+    if (!criar) { unlink(cam); return; }
+    int fd = open(cam, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    char txt[256];
+    int n = snprintf(txt, sizeof txt, "{\"porta\":%d,\"token\":\"%s\",\"pid\":%d}\n", porta, TOKEN, (int)getpid());
+    if (write(fd, txt, (size_t)n) < 0) {}
+    close(fd);
+}
+
+/* mostra os endereços pelos quais outros aparelhos da rede alcançam a ponte */
+static void mostrar_enderecos_rede(void) {
+    struct ifaddrs *lista = NULL;
+    if (getifaddrs(&lista) != 0) return;
+    int n = 0;
+    for (struct ifaddrs *i = lista; i; i = i->ifa_next) {
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+        struct sockaddr_in *a = (struct sockaddr_in *)i->ifa_addr;
+        uint32_t ip = ntohl(a->sin_addr.s_addr);
+        if ((ip >> 24) == 127) continue;
+        char txt[64];
+        inet_ntop(AF_INET, &a->sin_addr, txt, sizeof txt);
+        if (!n++) printf("  No navegador de OUTRO aparelho da mesma rede (um computador, por exemplo):\n\n");
+        printf("    \x1b[1;36mhttp://%s:%d/#token=%s\x1b[0m   (%s)\n", txt, porta, TOKEN, i->ifa_name);
+    }
+    freeifaddrs(lista);
+    if (n) printf("\n  O computador que abrir esse endereço também empresta o processador dele ao aparelho (tnux pc).\n"
+                  "  \x1b[33mUse só numa rede de confiança: a conexão não é cifrada.\x1b[0m\n\n");
+    else printf("  (não achei um endereço de rede: o aparelho está conectado ao Wi-Fi?)\n\n");
+}
+
 static void abrir_navegador(const char *url) {
     const char *prog = eh_termux() && tem_comando("termux-open-url") ? "termux-open-url" : tem_comando("xdg-open") ? "xdg-open" : NULL;
     if (!prog) return;
@@ -1143,7 +1339,8 @@ static void uso(void) {
            "  --abrir              abre o navegador ao iniciar\n"
            "  --token CHAVE        usa esta chave em vez de sortear uma\n"
            "  --permitir-host H    aceita pedidos para este nome (para usar atrás de um túnel https)\n"
-           "  --rede               aceita conexões de outros aparelhos da rede (cuidado: quem tiver a chave controla este aparelho)\n"
+           "  --rede               aceita conexões de outros aparelhos da rede: é como um computador abre o TNUX do celular\n"
+           "                       e empresta o processador dele (cuidado: quem tiver a chave controla este aparelho)\n"
            "  -v                   mostra os pedidos\n");
 }
 
@@ -1197,7 +1394,9 @@ int main(int argc, char **argv) {
            "  Abra no navegador deste aparelho:\n\n    \x1b[1;36m%s\x1b[0m\n\n"
            "  Aparelho: %s%s\n  A parte depois de #token= é a chave: quem a tiver controla este aparelho. Não compartilhe.\n"
            "  Ctrl+C desliga.\n\n", url, so, rede ? "  |  \x1b[1;33maceitando conexões da rede\x1b[0m" : "");
+    if (rede) mostrar_enderecos_rede();
     fflush(stdout);
+    ponte_json(1);
     if (abrir) abrir_navegador(url);
 
     while (!parar) {
@@ -1289,6 +1488,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("\nDesligando a ponte...\n");
+    ponte_json(0);
     for (int i = 0; i < MAX_CON; i++) con_fechar(&cons[i]);
     tela_parar();
     close(srv);

@@ -83,7 +83,7 @@ svg { display: block; }
 [data-fundo="por-do-sol"] { background: linear-gradient(170deg, #2b1b4a 0%, #8a3a6b 45%, #f08a4b 85%, #ffd27a 100%); }
 #fundo::after {
   content: ""; position: absolute; right: 4%; bottom: 6%; width: min(22vw, 190px); aspect-ratio: 1; opacity: .13; pointer-events: none;
-  background: url("../img/tnux.svg") center / contain no-repeat; filter: grayscale(1) brightness(3);
+  background: url("../img/tnux.svg") center / contain no-repeat; filter: grayscale(1) brightness(1.6);
 }
 #fundo[data-fundo="imagem"]::after { display: none; }
 
@@ -266,6 +266,7 @@ code { font: 13px var(--mono); padding: 1px 5px; border-radius: 4px; background:
 /* ------------------------------------------------------------------ terminal */
 .term { flex: 1; min-height: 0; background: #1d2326; padding: 4px 0 0 6px; position: relative; }
 .term .xterm { height: 100%; }
+.term .xterm, .term .xterm-viewport, .term .xterm-screen, .term .xterm-scrollable-element { background-color: #1d2326 !important; }
 .term .xterm-viewport { scrollbar-width: thin; }
 .teclas { flex: none; display: none; gap: 4px; padding: 5px; background: #171c1e; overflow-x: auto; scrollbar-width: none; }
 .teclas::-webkit-scrollbar { display: none; }

@@ -10,6 +10,7 @@
  *   tnux instalar NOME       instala um programa (apt/pkg/pacman/dnf/apk/zypper do aparelho)
  *   tnux apt ...             o apt do TNUX: entende os nomes do catálogo e o gerenciador do aparelho
  *   tnux desktop             liga a área de trabalho no navegador (tnuxd)
+ *   tnux pc ...              manda trabalho pesado para o computador que abriu a área de trabalho
  *   tnux --sandbox           o sistema do navegador rodando no terminal (não mexe no aparelho)
  */
 #define _DEFAULT_SOURCE
@@ -358,6 +359,261 @@ static int apt_ponte(int argc, char **argv) {
     return r;
 }
 
+/* ------------------------------------------------------------------ tnux pc: o computador faz o serviço pesado
+ *
+ * O celular tem pouco processador e pouca memória. Com a ponte ligada (tnux desktop --rede) e a área
+ * de trabalho aberta no navegador de um computador, este comando manda um trabalho para lá: o
+ * computador lê os arquivos do aparelho pela ponte, processa com o processador dele e grava o
+ * resultado de volta aqui.
+ */
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+static int pc_porta;
+static char pc_token[128];
+
+static int pc_achar_ponte(void) {
+    char *base = pasta_tnux();
+    char cam[4300];
+    snprintf(cam, sizeof cam, "%s/ponte.json", base);
+    free(base);
+    FILE *f = fopen(cam, "r");
+    if (!f) return 0;
+    char txt[512];
+    size_t n = fread(txt, 1, sizeof txt - 1, f);
+    fclose(f);
+    JVal *j = json_ler(txt, n);
+    if (!j) return 0;
+    pc_porta = (int)json_numero(j, "porta", 0);
+    snprintf(pc_token, sizeof pc_token, "%s", json_texto(j, "token", ""));
+    int pid = (int)json_numero(j, "pid", 0);
+    json_livrar(j);
+    return pc_porta > 0 && pc_token[0] && pid > 0 && kill(pid, 0) == 0;
+}
+
+/* um pedido HTTP à ponte deste aparelho. Devolve o status (0 se não conectou); o corpo vai para resp. */
+static int pc_http(const char *metodo, const char *cam, const char *corpo, size_t ncorpo, Buf *resp) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((uint16_t)pc_porta); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) != 0) { if (fd >= 0) close(fd); return 0; }
+    Buf req; buf_init(&req);
+    buf_printf(&req, "%s %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-TNUX-Token: %s\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n", metodo, cam, pc_porta, pc_token, (unsigned long)ncorpo);
+    if (ncorpo) buf_put(&req, corpo, ncorpo);
+    size_t feito = 0;
+    while (feito < req.n) { ssize_t w = write(fd, req.d + feito, req.n - feito); if (w <= 0) { if (errno == EINTR) continue; break; } feito += (size_t)w; }
+    buf_free(&req);
+    Buf tudo; buf_init(&tudo);
+    char tmp[8192];
+    for (;;) { ssize_t r = read(fd, tmp, sizeof tmp); if (r < 0 && errno == EINTR) continue; if (r <= 0) break; buf_put(&tudo, tmp, (size_t)r); }
+    close(fd);
+    int status = 0;
+    const char *fim = tudo.d ? strstr(tudo.d, "\r\n\r\n") : NULL;
+    if (tudo.n > 12 && fim) { status = atoi(tudo.d + 9); buf_put(resp, fim + 4, tudo.n - (size_t)(fim + 4 - tudo.d)); }
+    buf_free(&tudo);
+    return status;
+}
+
+/* caminho absoluto de um arquivo que existe (ou NULL, avisando) */
+static char *pc_abs(const char *cam, int precisa_existir) {
+    char real[4096];
+    if (realpath(cam, real)) return xstrdup(real);
+    if (precisa_existir) { fprintf(stderr, "tnux pc: %s: %s\n", cam, strerror(errno)); return NULL; }
+    if (cam[0] == '/') return xstrdup(cam);
+    char cwd[4096];
+    if (!getcwd(cwd, sizeof cwd)) return NULL;
+    return xasprintf("%s/%s", cwd, cam);
+}
+
+static volatile sig_atomic_t pc_cancelou;
+static void pc_sinal(int s) { (void)s; pc_cancelou = 1; }
+
+/* manda o trabalho e acompanha até o fim, mostrando o andamento. Devolve 0 se deu certo. */
+static int pc_enviar(Buf *trabalho, const char *descricao) {
+    Buf r; buf_init(&r);
+    int st = pc_http("POST", "/api/trabalhos/criar", trabalho->d, trabalho->n, &r);
+    JVal *j = st == 200 ? json_ler(buf_str(&r), r.n) : NULL;
+    int id = (int)json_numero(j, "id", 0);
+    if (!id) { fprintf(stderr, "tnux pc: a ponte recusou o trabalho: %s\n", j ? json_texto(j, "erro", "erro") : buf_str(&r)); json_livrar(j); buf_free(&r); return 1; }
+    json_livrar(j);
+    int tty = isatty(2), avisou = 0, espera = 0, codigo = 1;
+    struct sigaction sa, velho;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = pc_sinal;
+    sigaction(SIGINT, &sa, &velho);
+    fprintf(stderr, "\x1b[1;32m→\x1b[0m %s (trabalho %d): mandado para o computador\n", descricao, id);
+    char cam[96];
+    for (;;) {
+        if (pc_cancelou) {
+            snprintf(cam, sizeof cam, "/api/trabalhos/cancelar?id=%d", id);
+            r.n = 0;
+            pc_http("POST", cam, NULL, 0, &r);
+            fprintf(stderr, "\nCancelado.\n");
+            codigo = 130;
+            break;
+        }
+        snprintf(cam, sizeof cam, "/api/trabalhos/estado?id=%d", id);
+        r.n = 0;
+        st = pc_http("GET", cam, NULL, 0, &r);
+        j = st == 200 ? json_ler(buf_str(&r), r.n) : NULL;
+        if (!j) { fprintf(stderr, "\ntnux pc: a ponte parou de responder\n"); break; }
+        const char *estado = json_texto(j, "estado", ""), *msg = json_texto(j, "msg", "");
+        int p = (int)json_numero(j, "p", 0), ajud = (int)json_numero(j, "ajudantes", 0);
+        if (!strcmp(estado, "feito") || !strcmp(estado, "falhou")) {
+            if (tty) fprintf(stderr, "\r\x1b[K");
+            int ok = !strcmp(estado, "feito");
+            if (*msg) { fputs(msg, ok ? stdout : stderr); if (msg[strlen(msg) - 1] != '\n') fputc('\n', ok ? stdout : stderr); }
+            fprintf(stderr, ok ? "\x1b[1;32mPronto:\x1b[0m processado por %s\n" : "\x1b[1;31mFalhou\x1b[0m (em %s)\n", json_texto(j, "quem", "?")[0] ? json_texto(j, "quem", "?") : "ninguém");
+            codigo = ok ? 0 : 1;
+            json_livrar(j);
+            break;
+        }
+        if (!strcmp(estado, "fila")) {
+            if (!ajud && ++espera > 6 && !avisou) {
+                avisou = 1;
+                fprintf(stderr, "%sNenhum computador conectado ainda. Abra o endereço da ponte no navegador do computador\n"
+                                "(o que o \"tnux desktop --rede\" mostrou) e deixe a aba aberta. Esperando... (Ctrl+C cancela)\n", tty ? "\r\x1b[K" : "");
+            } else if (tty) fprintf(stderr, "\r\x1b[Kna fila, esperando um computador livre...");
+        } else if (tty) {
+            char barra[32];
+            int cheio = p * 24 / 100;
+            for (int i = 0; i < 24; i++) barra[i] = i < cheio ? '#' : '.';
+            barra[24] = 0;
+            /* só a primeira linha da mensagem de andamento */
+            fprintf(stderr, "\r\x1b[K[%s] %3d%%  %.*s", barra, p, (int)strcspn(msg, "\n") > 60 ? 60 : (int)strcspn(msg, "\n"), msg);
+        }
+        json_livrar(j);
+        usleep(350000);
+    }
+    sigaction(SIGINT, &velho, NULL);
+    buf_free(&r);
+    return codigo;
+}
+
+static void pc_lista_arquivos(Buf *b, const char *chave, char **v, int n, int *erro) {
+    buf_printf(b, ",\"%s\":[", chave);
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        char *a = pc_abs(v[i], 1);
+        if (!a) { *erro = 1; continue; }
+        if (k++) buf_putc(b, ',');
+        buf_json_str(b, a);
+        free(a);
+    }
+    buf_putc(b, ']');
+}
+
+static int pc_main(int argc, char **argv) {
+    const char *sub = argc > 1 ? argv[1] : "estado";
+    if (!strcmp(sub, "ajuda") || !strcmp(sub, "--help") || !strcmp(sub, "-h")) {
+        printf("\x1b[1mtnux pc\x1b[0m: usa o processador do computador que está com o TNUX aberto no navegador.\n\n"
+               "O aparelho manda os arquivos, o computador processa e devolve o resultado para cá.\n"
+               "Antes: ligue a ponte com \"tnux desktop --rede\" e abra o endereço mostrado no navegador do computador.\n\n"
+               "  tnux pc                              mostra os computadores conectados e os trabalhos\n"
+               "  tnux pc imagem [opções] FOTOS...     converte e reduz imagens\n"
+               "        --para webp|jpg|png   formato de saída (padrão: webp)\n"
+               "        --largura N           largura máxima em pontos (mantém a proporção)\n"
+               "        --qualidade N         de 1 a 100 (padrão: 82)\n"
+               "        --saida PASTA         onde gravar (padrão: ao lado do original)\n"
+               "  tnux pc zip SAIDA.zip ITENS...       compacta arquivos e pastas\n"
+               "  tnux pc unzip ARQUIVO.zip [PASTA]    extrai um zip\n"
+               "  tnux pc hash ARQUIVOS...             calcula o SHA-256\n"
+               "  tnux pc rodar 'COMANDOS' [ARQUIVOS...]\n"
+               "        roda comandos do shell do TNUX (sort, grep, sed, awk, programas .wasm...) no computador,\n"
+               "        sobre cópias dos arquivos dados; o que for criado volta para a pasta atual.\n"
+               "        Ex.: tnux pc rodar 'sort -n numeros.txt | uniq -c > contagem.txt' numeros.txt\n");
+        return 0;
+    }
+    if (!pc_achar_ponte()) {
+        fprintf(stderr, "tnux pc: a ponte não está ligada neste aparelho.\n"
+                        "Ligue com:  tnux desktop --rede\n"
+                        "e abra, no navegador do computador, o endereço que ela mostrar.\n");
+        return 1;
+    }
+    if (!strcmp(sub, "estado") || !strcmp(sub, "lista")) {
+        Buf r; buf_init(&r);
+        int st = pc_http("GET", "/api/trabalhos/lista", NULL, 0, &r);
+        JVal *j = st == 200 ? json_ler(buf_str(&r), r.n) : NULL;
+        if (!j) { fprintf(stderr, "tnux pc: a ponte não respondeu\n"); buf_free(&r); return 1; }
+        JVal *aj = json_obter(j, "ajudantes"), *tr = json_obter(j, "trabalhos");
+        if (!aj || !aj->n) printf("Nenhum computador conectado.\nAbra o endereço da ponte (tnux desktop --rede) no navegador do computador e deixe a aba aberta.\n");
+        else {
+            printf("\x1b[1mComputadores prontos para processar:\x1b[0m\n");
+            for (int i = 0; i < aj->n; i++)
+                printf("  \x1b[32m●\x1b[0m %s  (%d núcleos; sabe fazer: %s)\n", json_texto(aj->itens[i], "nome", "?"), (int)json_numero(aj->itens[i], "nucleos", 0), json_texto(aj->itens[i], "caps", ""));
+        }
+        if (tr && tr->n) {
+            printf("\n\x1b[1mTrabalhos:\x1b[0m\n");
+            for (int i = 0; i < tr->n; i++) {
+                JVal *t = tr->itens[i];
+                const char *m = json_texto(t, "msg", "");
+                printf("  #%-3d %-8s %-8s %3d%%  %.*s\n", (int)json_numero(t, "id", 0), json_texto(t, "tipo", ""), json_texto(t, "estado", ""), (int)json_numero(t, "p", 0), (int)strcspn(m, "\n") > 70 ? 70 : (int)strcspn(m, "\n"), m);
+            }
+        }
+        json_livrar(j);
+        buf_free(&r);
+        return 0;
+    }
+    Buf t; buf_init(&t);
+    int erro = 0, r = 1;
+    char cwd[4096] = "/";
+    if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "/");
+    if (!strcmp(sub, "imagem") || !strcmp(sub, "imagens")) {
+        const char *para = "webp", *saida = NULL;
+        int largura = 0, qualidade = 82, i = 2;
+        for (; i < argc; i++) {
+            if (!strcmp(argv[i], "--para") && i + 1 < argc) para = argv[++i];
+            else if (!strcmp(argv[i], "--largura") && i + 1 < argc) largura = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--qualidade") && i + 1 < argc) qualidade = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--saida") && i + 1 < argc) saida = argv[++i];
+            else break;
+        }
+        if (!strcmp(para, "jpeg")) para = "jpg";
+        if (i >= argc || (strcmp(para, "webp") && strcmp(para, "jpg") && strcmp(para, "png"))) { fprintf(stderr, "uso: tnux pc imagem [--para webp|jpg|png] [--largura N] [--qualidade N] [--saida PASTA] FOTOS...\n"); buf_free(&t); return 2; }
+        buf_printf(&t, "{\"tipo\":\"imagem\",\"para\":\"%s\",\"largura\":%d,\"qualidade\":%d", para, largura, qualidade < 1 ? 1 : qualidade > 100 ? 100 : qualidade);
+        if (saida) { char *a = pc_abs(saida, 1); if (!a) erro = 1; else { buf_puts(&t, ",\"saida\":"); buf_json_str(&t, a); free(a); } }
+        pc_lista_arquivos(&t, "arquivos", argv + i, argc - i, &erro);
+        buf_putc(&t, '}');
+        if (!erro) r = pc_enviar(&t, "Converter imagens");
+    } else if (!strcmp(sub, "zip")) {
+        if (argc < 4) { fprintf(stderr, "uso: tnux pc zip SAIDA.zip ARQUIVOS_E_PASTAS...\n"); buf_free(&t); return 2; }
+        char *s = pc_abs(argv[2], 0);
+        buf_puts(&t, "{\"tipo\":\"zip\",\"saida\":"); buf_json_str(&t, s); free(s);
+        buf_puts(&t, ",\"base\":"); buf_json_str(&t, cwd);
+        pc_lista_arquivos(&t, "itens", argv + 3, argc - 3, &erro);
+        buf_putc(&t, '}');
+        if (!erro) r = pc_enviar(&t, "Compactar");
+    } else if (!strcmp(sub, "unzip")) {
+        if (argc < 3) { fprintf(stderr, "uso: tnux pc unzip ARQUIVO.zip [PASTA]\n"); buf_free(&t); return 2; }
+        char *a = pc_abs(argv[2], 1), *d = pc_abs(argc > 3 ? argv[3] : ".", 0);
+        if (a && d) {
+            buf_puts(&t, "{\"tipo\":\"unzip\",\"arquivo\":"); buf_json_str(&t, a);
+            buf_puts(&t, ",\"saida\":"); buf_json_str(&t, d);
+            buf_putc(&t, '}');
+            r = pc_enviar(&t, "Extrair");
+        }
+        free(a); free(d);
+    } else if (!strcmp(sub, "hash") || !strcmp(sub, "sha256")) {
+        if (argc < 3) { fprintf(stderr, "uso: tnux pc hash ARQUIVOS...\n"); buf_free(&t); return 2; }
+        buf_puts(&t, "{\"tipo\":\"hash\"");
+        pc_lista_arquivos(&t, "arquivos", argv + 2, argc - 2, &erro);
+        buf_putc(&t, '}');
+        if (!erro) r = pc_enviar(&t, "Calcular SHA-256");
+    } else if (!strcmp(sub, "rodar") || !strcmp(sub, "comando")) {
+        if (argc < 3) { fprintf(stderr, "uso: tnux pc rodar 'COMANDOS' [ARQUIVOS...]\n"); buf_free(&t); return 2; }
+        buf_puts(&t, "{\"tipo\":\"comando\",\"cmd\":"); buf_json_str(&t, argv[2]);
+        buf_puts(&t, ",\"pasta\":"); buf_json_str(&t, cwd);
+        pc_lista_arquivos(&t, "arquivos", argv + 3, argc - 3, &erro);
+        buf_putc(&t, '}');
+        if (!erro) r = pc_enviar(&t, "Rodar no computador");
+    } else { fprintf(stderr, "tnux pc: não conheço \"%s\" (veja: tnux pc ajuda)\n", sub); r = 2; }
+    buf_free(&t);
+    return r;
+}
+
 /* ------------------------------------------------------------------ informações do sistema */
 
 static void banner(void) {
@@ -407,6 +663,8 @@ static void ajuda(void) {
            "  apt search TERMO       procura no catálogo do TNUX e no seu sistema\n"
            "  apt remove NOME        remove\n"
            "  tnux desktop           liga a área de trabalho (abre no navegador)\n"
+           "  tnux desktop --rede    idem, e deixa um computador da rede abrir o TNUX deste aparelho\n"
+           "  tnux pc ...            manda o serviço pesado para esse computador (veja: tnux pc ajuda)\n"
            "  tnux fetch             informações do sistema\n"
            "  tnux --sandbox         o TNUX do navegador rodando aqui, isolado do aparelho\n"
            "  exit                   sai\n\n"
@@ -606,6 +864,7 @@ static int interno(char *linha, int *codigo, int *sair, Editor *ed) {
             if (ac >= 2 && (!strcmp(av[1], "instalar") || !strcmp(av[1], "install"))) { av[1] = "install"; *codigo = apt_ponte(ac, av); }
             else if (ac >= 2 && (!strcmp(av[1], "remover") || !strcmp(av[1], "remove"))) { av[1] = "remove"; *codigo = apt_ponte(ac, av); }
             else if (ac >= 2 && !strcmp(av[1], "apt")) *codigo = apt_ponte(ac - 1, av + 1);
+            else if (ac >= 2 && (!strcmp(av[1], "pc") || !strcmp(av[1], "computador"))) *codigo = pc_main(ac - 1, av + 1);
             else if (ac >= 2 && (!strcmp(av[1], "fetch") || !strcmp(av[1], "neofetch"))) { banner(); *codigo = 0; }
             else if (ac == 1 || !strcmp(av[1], "ajuda") || !strcmp(av[1], "help")) { ajuda(); *codigo = 0; }
             else if (!strcmp(av[1], "versao") || !strcmp(av[1], "--version")) { printf("%s %s (%s), modo ponte\n", TNUX_NOME, TNUX_VERSAO, TNUX_CODINOME); *codigo = 0; }
@@ -713,6 +972,7 @@ int main(int argc, char **argv) {
         const char *a = argv[1];
         if (!strcmp(a, "--sandbox") || !strcmp(a, "sandbox")) return sandbox_main(argc - 1, argv + 1);
         if (!strcmp(a, "desktop") || !strcmp(a, "area-de-trabalho")) return desktop(argc - 2, argv + 2);
+        if (!strcmp(a, "pc") || !strcmp(a, "computador")) return pc_main(argc - 1, argv + 1);
         if (!strcmp(a, "apt") || !strcmp(a, "apt-get")) return apt_ponte(argc - 1, argv + 1);
         if (!strcmp(a, "instalar") || !strcmp(a, "install")) { argv[1] = "install"; return apt_ponte(argc, argv); }
         if (!strcmp(a, "remover") || !strcmp(a, "remove")) { argv[1] = "remove"; return apt_ponte(argc, argv); }
