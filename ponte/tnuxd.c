@@ -6,6 +6,7 @@
  *   - /ws/pty      um terminal real (PTY) por WebSocket: é o shell do aparelho;
  *   - /api/fs/...  arquivos e pastas do aparelho, para o gerenciador de arquivos e o editor;
  *   - /api/apps    programas instalados (os .desktop do sistema e os apps web do TNUX);
+ *   - /c/CHAVE/... os apps web instalados em ~/.tnux/apps, isolados da área de trabalho;
  *   - /api/lancar  abre um programa gráfico do aparelho;
  *   - /ws/tela     a tela (VNC) em que esses programas aparecem, vista de dentro do TNUX.
  *
@@ -130,7 +131,7 @@ typedef struct {
 } Con;
 
 static Con cons[MAX_CON];
-static char *RAIZ, *PASTA, TOKEN[80];
+static char *RAIZ, *PASTA, TOKEN[80], CHAVE_APPS[40];
 static int porta = 8096, rede = 0, verboso = 0;
 static char hosts_extra[8][128];
 static int n_hosts_extra;
@@ -229,19 +230,13 @@ static int igual_seguro(const char *a, const char *b) {
     for (size_t i = 0; i < la && i < lb; i++) d |= (unsigned char)(a[i] ^ b[i]);
     return d == 0 && la == lb;
 }
-/* de onde veio a chave: 1 cabeçalho, 2 endereço, 3 cookie; 0 = sem chave válida */
+/* A chave vem no cabeçalho X-TNUX-Token ou em ?token= no endereço. De propósito NÃO há cookie:
+ * assim, uma página qualquer aberta neste mesmo endereço (um app baixado, por exemplo) não ganha
+ * acesso ao aparelho só por estar no mesmo navegador. */
 static int autenticado(const Req *r) {
     char v[512];
     if (cabecalho(r, "X-TNUX-Token", v, sizeof v) && igual_seguro(v, TOKEN)) return 1;
     if (parametro(r, "token", v, sizeof v) && igual_seguro(v, TOKEN)) return 2;
-    if (cabecalho(r, "Cookie", v, sizeof v)) {
-        const char *p = strstr(v, "tnux_token=");
-        if (p) {
-            p += 11;
-            char t[128]; size_t l = strcspn(p, "; ");
-            if (l < sizeof t) { memcpy(t, p, l); t[l] = 0; if (igual_seguro(t, TOKEN)) return 3; }
-        }
-    }
     return 0;
 }
 /* o pedido veio para um endereço nosso? (protege contra páginas de outros sites apontando para cá) */
@@ -860,6 +855,8 @@ static void api_info(Con *c) {
     b_puts(&b, ",\"gerenciador\":"); b_json(&b, ger ? ger : "");
     b_printf(&b, ",\"cpus\":%ld,\"mem_mb\":%ld,\"termux\":%s,\"root\":%s,\"tem_tnux\":%s", cpus, pags > 0 ? (long)((double)pags * (double)tpag / 1048576.0) : 0,
              eh_termux() ? "true" : "false", geteuid() == 0 ? "true" : "false", access(tnux, X_OK) == 0 ? "true" : "false");
+    b_puts(&b, ",\"chave_apps\":"); b_json(&b, CHAVE_APPS);
+    b_printf(&b, ",\"porta\":%d", porta);
     b_printf(&b, ",\"tela_disponivel\":%s,\"tela_ativa\":%s,\"tela_propria\":%s}", achar_xvnc() ? "true" : "false", tela_ativa() ? "true" : "false",
              ((getenv("DISPLAY") && *getenv("DISPLAY")) || (getenv("WAYLAND_DISPLAY") && *getenv("WAYLAND_DISPLAY"))) ? "true" : "false");
     resp_json(c, 200, b.d);
@@ -1033,14 +1030,9 @@ static void atender(Con *c, const Req *r) {
         return;
     }
     int aut = autenticado(r);
-    /* quem chega com a chave ganha um cookie: é o que deixa imagens e páginas (/arq, /apps) carregarem */
-    char cookie[256] = "";
-    if (aut == 1 || aut == 2) snprintf(cookie, sizeof cookie, "Set-Cookie: tnux_token=%s; Path=/; HttpOnly; SameSite=Strict\r\n", TOKEN);
-
     if (!strncmp(cam, "/api/", 5)) {
         if (!aut) { resp_erro(c, 401, "chave (token) ausente ou inválida"); return; }
         if (!origem_ok(r)) { resp_erro(c, 403, "origem não permitida"); return; }
-        size_t antes = c->out.n;
         if (!strcmp(cam, "/api/info")) api_info(c);
         else if (!strncmp(cam, "/api/fs/", 8)) api_fs(c, r, cam + 8);
         else if (!strcmp(cam, "/api/tem")) api_tem(c, r);
@@ -1049,36 +1041,33 @@ static void atender(Con *c, const Req *r) {
         else if (!strcmp(cam, "/api/lancar")) api_lancar(c, r);
         else if (!strncmp(cam, "/api/tela/", 10)) api_tela(c, r, cam + 10);
         else resp_erro(c, 404, "não existe");
-        /* encaixa o cookie logo depois da linha de status */
-        if (cookie[0] && c->out.n > antes) {
-            char *nl = strstr(c->out.d + antes, "\r\n");
-            if (nl) {
-                size_t pos = (size_t)(nl - c->out.d) + 2, lc = strlen(cookie);
-                b_res(&c->out, lc);
-                memmove(c->out.d + pos + lc, c->out.d + pos, c->out.n - pos);
-                memcpy(c->out.d + pos, cookie, lc);
-                c->out.n += lc;
-                c->out.d[c->out.n] = 0;
-            }
-        }
         return;
     }
     if (strcmp(r->metodo, "GET") && strcmp(r->metodo, "HEAD")) { resp_erro(c, 405, "método não permitido"); return; }
     char arq[8400];
-    if (!strncmp(cam, "/arq/", 5)) {                 /* um arquivo qualquer do aparelho (para ver imagens e páginas) */
+    if (!strncmp(cam, "/arq/", 5)) {                 /* um arquivo qualquer do aparelho (imagens, vídeos, músicas) */
         if (!aut) { resp_erro(c, 401, "chave (token) ausente ou inválida"); return; }
         if (strstr(cam, "/../") || strlen(cam) < 6) { resp_erro(c, 400, "caminho inválido"); return; }
-        enviar_arquivo(c, r, cam + 4, NULL, cookie);
+        enviar_arquivo(c, r, cam + 4, NULL, "Content-Security-Policy: sandbox\r\n");
         return;
     }
-    if (!strncmp(cam, "/apps/", 6)) {                /* apps web instalados em ~/.tnux/apps */
-        if (!aut) { resp_erro(c, 401, "chave (token) ausente ou inválida"); return; }
+    if (!strncmp(cam, "/c/", 3)) {
+        /* apps web instalados em ~/.tnux/apps. Em vez da chave do aparelho, o endereço leva uma chave
+         * própria, que só dá acesso a esta pasta: o código dos apps não é do TNUX e não deve poder
+         * mexer no aparelho. A área de trabalho ainda os abre por outro nome de host (localhost em vez
+         * de 127.0.0.1), para o navegador tratá-los como um site separado. */
+        size_t lk = strlen(CHAVE_APPS);
+        char dada[64];
+        size_t ld = strcspn(cam + 3, "/");
+        snprintf(dada, sizeof dada, "%.*s", (int)(ld < 60 ? ld : 60), cam + 3);
+        if (!igual_seguro(dada, CHAVE_APPS) || cam[3 + lk] != '/') { resp_erro(c, 401, "chave de conteúdo inválida"); return; }
         char base[4300];
         snprintf(base, sizeof base, "%s/apps", PASTA);
-        if (!caminho_dentro(base, cam + 6, arq, sizeof arq)) { resp_erro(c, 400, "caminho inválido"); return; }
+        const char *rel = cam + 3 + lk + 1;
+        if (!*rel || strstr(rel, "/.") || rel[0] == '.' || !caminho_dentro(base, rel, arq, sizeof arq)) { resp_erro(c, 400, "caminho inválido"); return; }
         struct stat st;
         if (stat(arq, &st) == 0 && S_ISDIR(st.st_mode)) strncat(arq, "/index.html", sizeof arq - strlen(arq) - 1);
-        enviar_arquivo(c, r, arq, NULL, cookie);
+        enviar_arquivo(c, r, arq, NULL, NULL);
         return;
     }
     /* a página do TNUX (pasta web/): pública, é só o código da área de trabalho */
@@ -1132,6 +1121,13 @@ static void token_gerar(void) {
     close(fd);
     for (size_t i = 0; i < sizeof r; i++) snprintf(TOKEN + i * 2, 3, "%02x", r[i]);
 }
+static void chave_apps_gerar(void) {
+    unsigned char r[16];
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0 || read(fd, r, sizeof r) != (ssize_t)sizeof r) { fprintf(stderr, "tnuxd: não consegui gerar a chave de conteúdo\n"); exit(1); }
+    close(fd);
+    for (size_t i = 0; i < sizeof r; i++) snprintf(CHAVE_APPS + i * 2, 3, "%02x", r[i]);
+}
 
 static void abrir_navegador(const char *url) {
     const char *prog = eh_termux() && tem_comando("termux-open-url") ? "termux-open-url" : tem_comando("xdg-open") ? "xdg-open" : NULL;
@@ -1170,6 +1166,7 @@ int main(int argc, char **argv) {
     snprintf(idx, sizeof idx, "%s/web/index.html", RAIZ);
     if (access(idx, R_OK) != 0) { fprintf(stderr, "tnuxd: não achei a pasta web/ do TNUX (procurei em %s). Rode de dentro da pasta do TNUX ou defina TNUX_RAIZ.\n", RAIZ); return 1; }
     if (!TOKEN[0]) token_gerar();
+    chave_apps_gerar();
     if (strlen(TOKEN) < 16) { fprintf(stderr, "tnuxd: a chave precisa ter pelo menos 16 caracteres\n"); return 2; }
 
     signal(SIGPIPE, SIG_IGN);
